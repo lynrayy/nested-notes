@@ -16,9 +16,9 @@ export default class NestedNotesPlugin extends Plugin {
 		this.addSettingTab(new NestedNotesSettingTab(this.app, this));
 
 		this.addCommand({
-			id: 'open-nested-notes-view',
-			name: 'Open Nested Notes view',
-			callback: () => this.activateView(), 
+			id: 'open-view',
+			name: 'Open view',
+			callback: () => { void this.activateView(); },
 		});
 
 		this.registerEvent(
@@ -27,12 +27,12 @@ export default class NestedNotesPlugin extends Plugin {
 			})
 		);
 
-		this.app.workspace.onLayoutReady(() => this.activateView());
+		this.app.workspace.onLayoutReady(() => { void this.activateView(); });
 	}
 
 	/** Called by Obsidian when the plugin is disabled. Removes the custom view from all leaves. */
 	onunload(): void {
-		this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+		
 	}
 
 	/** Opens the Nested Notes panel in the left sidebar, or reveals it if already open. */
@@ -40,7 +40,7 @@ export default class NestedNotesPlugin extends Plugin {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
 		const first = existing[0];
 		if (first) {
-			this.app.workspace.revealLeaf(first);
+			await this.app.workspace.revealLeaf(first);
 			return;
 		}
 		const leaf = this.app.workspace.getLeftLeaf(false);

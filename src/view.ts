@@ -54,7 +54,7 @@ export class NestedNotesView extends ItemView {
 						const file = await this.app.vault.create(`${base}${name}.md`, '');
 						await this.app.workspace.getLeaf(false).openFile(file);
 
-						await (this.app.fileManager as any).promptForFileRename(file)
+						await (this.app.fileManager as unknown).promptForFileRename(file)
 					})
 			);
 			menu.showAtMouseEvent(e);
@@ -269,7 +269,7 @@ export class NestedNotesView extends ItemView {
 			menu.addItem(item => item
 				.setTitle('Rename...')
 				.setIcon('pencil')
-				.onClick(() => (this.app.fileManager as any).promptForFileRename(file))
+				.onClick(() => (this.app.fileManager as unknown).promptForFileRename(file))
 			);
 			menu.addItem(item => item
 				.setTitle('Delete')
