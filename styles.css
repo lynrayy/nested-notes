@@ -1,8 +1,76 @@
-/*
+.cn-container {
+	padding: 4px 0;
+	overflow-y: auto;
+	height: 100%;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.cn-note-row {
+	display: flex;
+	align-items: center;
+	padding: 2px 6px;
+	cursor: pointer;
+	border-radius: 4px;
+	user-select: none;
+	min-height: 28px;
+}
 
-If your plugin does not need CSS, delete this file.
+.cn-note-row:hover {
+	background: var(--background-modifier-hover);
+}
 
-*/
+.cn-note-row.cn-drag-over {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-radius: 4px;
+}
+
+.cn-note-row.cn-drag-over .cn-toggle,
+.cn-note-row.cn-drag-over .cn-name {
+	color: var(--text-on-accent);
+}
+
+.cn-toggle {
+	width: 16px;
+	flex-shrink: 0;
+	font-size: 9px;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.cn-toggle-spacer {
+	width: 16px;
+	flex-shrink: 0;
+}
+
+.cn-icon {
+	flex-shrink: 0;
+	margin-right: 5px;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+}
+
+.cn-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--nav-item-size);
+	color: var(--nav-item-color);
+}
+
+.cn-folder-path {
+	opacity: 0.4;
+}
+
+.cn-children {
+	padding-left: 16px;
+}
+
+.cn-empty {
+	padding: 8px 12px;
+	color: var(--text-muted);
+	font-size: var(--font-small);
+}

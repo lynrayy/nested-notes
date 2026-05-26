@@ -1,99 +1,92 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import {Plugin, TAbstractFile, TFile} from 'obsidian';
+import {NestedNotesView, VIEW_TYPE} from './view';
+import {NestedNotesData, DEFAULT_DATA} from './types';
+import {NestedNotesSettingTab} from './settings';
 
-// Remember to rename these classes and interfaces!
+export default class NestedNotesPlugin extends Plugin {
+	data!: NestedNotesData;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	/** Called by Obsidian when the plugin is enabled. Registers the view, ribbon icon, command, and vault event listeners. */
+	async onload(): Promise<void> {
 
-	async onload() {
-		await this.loadSettings();
+		await this.loadPluginData();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		this.registerView(VIEW_TYPE, (leaf) => new NestedNotesView(leaf, this));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		this.addSettingTab(new NestedNotesSettingTab(this.app, this));
 
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+			id: 'open-nested-notes-view',
+			name: 'Open Nested Notes view',
+			callback: () => this.activateView(), 
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.registerEvent(
+			this.app.vault.on('create', (file: TAbstractFile) => {
+				if (file instanceof TFile) this.refreshView();
+			})
+		);
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
+		this.app.workspace.onLayoutReady(() => this.activateView());
+	}
+
+	/** Called by Obsidian when the plugin is disabled. Removes the custom view from all leaves. */
+	onunload(): void {
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+	}
+
+	/** Opens the Nested Notes panel in the left sidebar, or reveals it if already open. */
+	async activateView(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+		const first = existing[0];
+		if (first) {
+			this.app.workspace.revealLeaf(first);
+			return;
+		}
+		const leaf = this.app.workspace.getLeftLeaf(false);
+		if (leaf) {
+			await leaf.setViewState({type: VIEW_TYPE, active: true});
+		}
+	}
+
+	/** Opens the view on plugin load without stealing focus (safe to call while settings modal is open). */
+	private async openViewSilently(): Promise<void> {
+		if (this.app.workspace.getLeavesOfType(VIEW_TYPE).length > 0) return;
+		const leaf = this.app.workspace.getLeftLeaf(false);
+		if (leaf) {
+			await leaf.setViewState({type: VIEW_TYPE, active: true});
+		}
+	}
+
+	/** Reads persisted data from data.json and merges it with defaults. */
+	async loadPluginData(): Promise<void> {
+		const saved = await this.loadData() as Partial<NestedNotesData> | null;
+		this.data = Object.assign({}, DEFAULT_DATA, saved);
+		// Ensure arrays are always present
+		if (!this.data.children) this.data.children = {};
+		if (!this.data.collapsed) this.data.collapsed = [];
+	}
+
+	/** Persists the current plugin data to data.json. */
+	async savePluginData(): Promise<void> {
+		// Sort each parent's children array alphabetically by basename
+		for (const parentPath of Object.keys(this.data.children)) {
+			const arr = this.data.children[parentPath];
+			if (!arr) continue;
+			arr.sort((a, b) => {
+				const nameA = a.split('/').pop() ?? a;
+				const nameB = b.split('/').pop() ?? b;
+				return nameA.localeCompare(nameB);
+			});
+		}
+
+		await this.saveData(this.data);
+	}
+
+	/** Triggers a full re-render of the tree in all open Nested Notes leaves. */
+	refreshView(): void {
+		this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach(leaf => {
+			(leaf.view as NestedNotesView).renderTree();
 		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
-	}
-
-	onunload() {
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }

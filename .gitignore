@@ -1,3 +1,4 @@
+
 # vscode
 .vscode 
 
@@ -20,3 +21,8 @@ data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# ignore local AI files 
+.claude
+CLAUDE.md
+AGENTS.md
