@@ -17,7 +17,7 @@ export class NestedNotesSettingTab extends PluginSettingTab {
 		/** Show file icon setting */
 		new Setting(containerEl)
 			.setName('Show file icon')
-			.setDesc('Display the file icon beside each note, matching the icon shown in the Files view.')
+			.setDesc('Display the file icon beside each note, matching the icon shown in the files view.')
 			.addToggle(toggle => {
 				toggle.setValue(this.plugin.data.showFileIcon);
 				toggle.onChange(async (value) => {
