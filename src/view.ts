@@ -1,6 +1,10 @@
 import {ItemView, Menu, TFile, WorkspaceLeaf, setIcon} from 'obsidian';
 import type NestedNotesPlugin from './main';
 
+interface FileManagerWithRename {
+    promptForFileRename: (file: TFile) => Promise<void>;
+}
+
 export const VIEW_TYPE = 'nested-notes-view';
 
 export class NestedNotesView extends ItemView {
@@ -20,7 +24,7 @@ export class NestedNotesView extends ItemView {
 
 	/** Returns the display name shown in the view header. */
 	getDisplayText(): string {
-		return 'Nested Notes';
+		return 'Nested notes';
 	}
 
 	/** Returns the icon shown in the tab for this view. */
@@ -54,7 +58,7 @@ export class NestedNotesView extends ItemView {
 						const file = await this.app.vault.create(`${base}${name}.md`, '');
 						await this.app.workspace.getLeaf(false).openFile(file);
 
-						await (this.app.fileManager as unknown).promptForFileRename(file)
+						await (this.app.fileManager as unknown as FileManagerWithRename).promptForFileRename(file)
 					})
 			);
 			menu.showAtMouseEvent(e);
@@ -104,7 +108,7 @@ export class NestedNotesView extends ItemView {
 					this.plugin.data.collapsed[collapsedIdx] = file.path;
 				}
 
-				this.plugin.savePluginData();
+				void this.plugin.savePluginData();
 				this.renderTree();
 			})
 		);
@@ -148,7 +152,7 @@ export class NestedNotesView extends ItemView {
 					this.plugin.data.collapsed.splice(collapsedIdx, 1);
 				}
 
-				this.plugin.savePluginData();
+				void this.plugin.savePluginData();
 				this.renderTree();
 			})
 		);
@@ -244,9 +248,15 @@ export class NestedNotesView extends ItemView {
 		nameWrap.createSpan({text: file.basename});
 
 		// Open note on click
-		row.addEventListener('click', async () => {
-			const leaf = this.app.workspace.getLeaf(false);
-			await leaf.openFile(file);
+		// row.addEventListener('click', async () => {
+		// 	const leaf = this.app.workspace.getLeaf(false);
+		// 	await leaf.openFile(file);
+		// });
+		row.addEventListener('click', () => {
+			void (async () => {
+				const leaf = this.app.workspace.getLeaf(false);
+				await leaf.openFile(file);
+			})();
 		});
 
 		// Context menu on right-click
@@ -269,12 +279,19 @@ export class NestedNotesView extends ItemView {
 			menu.addItem(item => item
 				.setTitle('Rename...')
 				.setIcon('pencil')
-				.onClick(() => (this.app.fileManager as unknown).promptForFileRename(file))
+				// .onClick(() => (this.app.fileManager as unknown).promptForFileRename(file))
+
+				.onClick(() => {
+					void (this.app.fileManager as unknown as FileManagerWithRename).promptForFileRename(file);
+				})
 			);
 			menu.addItem(item => item
 				.setTitle('Delete')
 				.setIcon('trash')
-				.onClick(() => this.app.vault.trash(file, true))
+				// .onClick(() => this.app.vault.trash(file, true))
+				.onClick(() => {
+					void this.app.fileManager.trashFile(file);
+				})
 			);
 
 			menu.showAtMouseEvent(e);
@@ -285,12 +302,14 @@ export class NestedNotesView extends ItemView {
 			e.stopPropagation();
 			this.draggedPath = file.path;
 			e.dataTransfer?.setData('text/plain', file.path);
-			row.style.opacity = '0.5';
+			// row.style.opacity = '0.5';
+			row.classList.add('cn-dragging');
 		});
 
 		// Drag end: restore opacity and clear the tracked dragged path
 		row.addEventListener('dragend', () => {
-			row.style.opacity = '';
+			// row.style.opacity = '';
+			row.classList.remove('cn-dragging');
 			this.draggedPath = null;
 		});
 
@@ -346,8 +365,8 @@ export class NestedNotesView extends ItemView {
 				break;
 			}
 		}
-		console.log(`Promoted ${path} to top-level`);
-		this.plugin.savePluginData();
+		// console.log(`Promoted ${path} to top-level`);
+		void this.plugin.savePluginData();
 		this.renderTree();
 	}
 
@@ -359,7 +378,7 @@ export class NestedNotesView extends ItemView {
 		} else {
 			this.plugin.data.collapsed.push(path);
 		}
-		this.plugin.savePluginData();
+		void this.plugin.savePluginData();
 		this.renderTree();
 	}
 
@@ -382,7 +401,7 @@ export class NestedNotesView extends ItemView {
 		}
 		this.plugin.data.children[parentPath].push(childPath);
 
-		this.plugin.savePluginData();
+		void this.plugin.savePluginData();
 		this.renderTree();
 	}
 
