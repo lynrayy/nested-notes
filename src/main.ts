@@ -3,8 +3,14 @@ import {NestedNotesView, VIEW_TYPE} from './view';
 import {NestedNotesData, DEFAULT_DATA} from './types';
 import {NestedNotesSettingTab} from './settings';
 
+type LegacyChildren = Record<string, string[]>;
+type SavedNestedNotesData = Partial<NestedNotesData> & {
+	children?: LegacyChildren;
+};
+
 export default class NestedNotesPlugin extends Plugin {
 	data!: NestedNotesData;
+	private legacyChildren: LegacyChildren | null = null;
 
 	/** Called by Obsidian when the plugin is enabled. Registers the view, ribbon icon, command, and vault event listeners. */
 	async onload(): Promise<void> {
@@ -60,27 +66,26 @@ export default class NestedNotesPlugin extends Plugin {
 
 	/** Reads persisted data from data.json and merges it with defaults. */
 	async loadPluginData(): Promise<void> {
-		const saved = await this.loadData() as Partial<NestedNotesData> | null;
-		this.data = Object.assign({}, DEFAULT_DATA, saved);
-		// Ensure arrays are always present
-		if (!this.data.children) this.data.children = {};
-		if (!this.data.collapsed) this.data.collapsed = [];
+		const saved = await this.loadData() as SavedNestedNotesData | null;
+		this.legacyChildren = saved?.children ?? null;
+		this.data = {
+			...DEFAULT_DATA,
+			collapsed: saved?.collapsed ?? DEFAULT_DATA.collapsed,
+			showFileIcon: saved?.showFileIcon ?? DEFAULT_DATA.showFileIcon,
+			showFolderPath: saved?.showFolderPath ?? DEFAULT_DATA.showFolderPath,
+		};
 	}
 
 	/** Persists the current plugin data to data.json. */
 	async savePluginData(): Promise<void> {
-		// Sort each parent's children array alphabetically by basename
-		for (const parentPath of Object.keys(this.data.children)) {
-			const arr = this.data.children[parentPath];
-			if (!arr) continue;
-			arr.sort((a, b) => {
-				const nameA = a.split('/').pop() ?? a;
-				const nameB = b.split('/').pop() ?? b;
-				return nameA.localeCompare(nameB);
-			});
-		}
-
 		await this.saveData(this.data);
+	}
+
+	/** Returns old virtual nesting data once, so the view can migrate it into folders. */
+	consumeLegacyChildren(): LegacyChildren | null {
+		const legacyChildren = this.legacyChildren;
+		this.legacyChildren = null;
+		return legacyChildren;
 	}
 
 	/** Triggers a full re-render of the tree in all open Nested Notes leaves. */

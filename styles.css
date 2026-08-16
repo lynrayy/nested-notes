@@ -61,6 +61,59 @@
 	color: var(--nav-item-color);
 }
 
+.cn-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+	margin-left: 4px;
+	opacity: 0;
+	pointer-events: none;
+	visibility: hidden;
+}
+
+.cn-note-row:hover .cn-actions,
+.cn-note-row:focus-within .cn-actions {
+	opacity: 1;
+	pointer-events: auto;
+	visibility: visible;
+}
+
+.cn-note-action {
+	appearance: none;
+	width: 20px;
+	height: 20px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: none !important;
+	border-radius: 4px;
+	background: transparent !important;
+	box-shadow: none !important;
+	color: var(--text-muted);
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+
+.cn-note-action svg {
+	width: 14px;
+	height: 14px;
+}
+
+.cn-note-action:hover,
+.cn-note-action:focus-visible {
+	background: transparent !important;
+	box-shadow: none !important;
+	color: var(--text-normal);
+}
+
+.cn-note-row.cn-drag-over .cn-note-action {
+	color: var(--text-on-accent);
+}
+
 .cn-folder-path {
 	opacity: 0.4;
 }
@@ -77,4 +130,44 @@
 
 .cn-note-row.cn-dragging {
     opacity: 0.5;
+}
+
+.markdown-rendered .callout[data-callout="nested-notes"] {
+	--callout-color: 120, 120, 120;
+	--callout-icon: lucide-list-tree;
+	margin: 1em 0 0;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	box-shadow: none;
+}
+
+.markdown-rendered .callout[data-callout="nested-notes"] .callout-title {
+	padding: 0;
+	color: var(--text-muted);
+	font-size: var(--font-small);
+	font-weight: 500;
+}
+
+.markdown-rendered .callout[data-callout="nested-notes"] .callout-content {
+	margin: 4px 0 0;
+	padding: 0;
+}
+
+.markdown-rendered .callout[data-callout="nested-notes"] .callout-content ul {
+	margin: 0;
+	padding-inline-start: 18px;
+}
+
+.nested-notes-rename-input {
+	width: 100%;
+	margin-top: 8px;
+}
+
+.nested-notes-rename-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
 }
