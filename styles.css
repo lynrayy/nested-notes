@@ -12,6 +12,27 @@
 	border-radius: 4px;
 	user-select: none;
 	min-height: 28px;
+	position: relative;
+}
+
+.cn-note-row.cn-insert-before::before,
+.cn-note-row.cn-insert-after::after {
+	content: '';
+	position: absolute;
+	left: 6px;
+	right: 6px;
+	height: 2px;
+	background: var(--interactive-accent);
+	border-radius: 2px;
+	pointer-events: none;
+}
+
+.cn-note-row.cn-insert-before::before {
+	top: -1px;
+}
+
+.cn-note-row.cn-insert-after::after {
+	bottom: -1px;
 }
 
 .cn-note-row:hover {
@@ -135,16 +156,20 @@
 .markdown-rendered .callout[data-callout="nested-notes"] {
 	--callout-color: 120, 120, 120;
 	--callout-icon: lucide-list-tree;
-	margin: 1em 0 0;
-	padding: 6px 8px;
+	position: relative;
+	overflow: hidden;
+	margin: 0.5em 0;
+	padding: 6px 10px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
-	background: var(--background-secondary);
+	background-color: var(--background-secondary);
 	box-shadow: none;
 }
 
 .markdown-rendered .callout[data-callout="nested-notes"] .callout-title {
+	margin: 0;
 	padding: 0;
+	background: transparent;
 	color: var(--text-muted);
 	font-size: var(--font-small);
 	font-weight: 500;
@@ -153,6 +178,7 @@
 .markdown-rendered .callout[data-callout="nested-notes"] .callout-content {
 	margin: 4px 0 0;
 	padding: 0;
+	background: transparent;
 }
 
 .markdown-rendered .callout[data-callout="nested-notes"] .callout-content ul {

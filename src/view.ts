@@ -20,9 +20,13 @@ interface NoteNode {
 
 type SubmitNoteName = (name: string) => Promise<void>;
 
+type DropMode = 'before' | 'after' | 'nest';
+
 const CHILD_LINKS_CALLOUT = '> [!nested-notes]+ Pages inside';
 const LEGACY_CHILD_LINKS_START = '<!-- nested-notes:children:start -->';
 const LEGACY_CHILD_LINKS_END = '<!-- nested-notes:children:end -->';
+
+const ORDER_PREFIX_RE = /^(\d+)\s+(.*)$/;
 
 export const VIEW_TYPE = 'nested-notes-view';
 
@@ -95,6 +99,9 @@ export class NestedNotesView extends ItemView {
 	plugin: NestedNotesPlugin;
 	private draggedPath: string | null = null;
 	private dropHandled = false;
+	private dropRow: HTMLElement | null = null;
+	private dropMode: DropMode | null = null;
+	private suppressEvents = false;
 	private activeMenu: Menu | null = null;
 	private activeMenuPath: string | null = null;
 
@@ -126,7 +133,7 @@ export class NestedNotesView extends ItemView {
 				item.setTitle('New note')
 					.setIcon('file-plus')
 					.onClick(() => {
-						void this.createTopLevelNote();
+						void this.runBatched(() => this.createTopLevelNote());
 					})
 			);
 			menu.showAtMouseEvent(e);
@@ -146,21 +153,24 @@ export class NestedNotesView extends ItemView {
 
 			const dragged = e.dataTransfer?.getData('text/plain') ?? this.draggedPath;
 			if (!dragged) return;
-			void this.promoteToTopLevel(dragged);
+			void this.runBatched(() => this.promoteToTopLevel(dragged));
 		});
 
 		this.registerEvent(
 			this.app.vault.on('create', () => {
+				if (this.suppressEvents) return;
 				void this.handleVaultStructureChange();
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', () => {
+				if (this.suppressEvents) return;
 				void this.handleVaultStructureChange();
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on('delete', () => {
+				if (this.suppressEvents) return;
 				void this.handleVaultStructureChange();
 			})
 		);
@@ -226,10 +236,14 @@ export class NestedNotesView extends ItemView {
 		if (this.plugin.data.showFolderPath) {
 			const folderPath = file.parent?.path;
 			if (folderPath && folderPath !== '/' && folderPath !== '') {
-				nameWrap.createSpan({cls: 'cn-folder-path', text: `${folderPath}/`});
+				const displayPath = folderPath
+					.split('/')
+					.map(segment => this.stripOrderPrefix(segment))
+					.join('/');
+				nameWrap.createSpan({cls: 'cn-folder-path', text: `${displayPath}/`});
 			}
 		}
-		nameWrap.createSpan({text: file.basename});
+		nameWrap.createSpan({text: this.displayBasename(file)});
 
 		const actions = row.createSpan({cls: 'cn-actions'});
 
@@ -262,7 +276,7 @@ export class NestedNotesView extends ItemView {
 		addButton.addEventListener('click', (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			void this.createNestedNote(file);
+			void this.runBatched(() => this.createNestedNote(file));
 		});
 
 		row.addEventListener('click', () => {
@@ -280,29 +294,44 @@ export class NestedNotesView extends ItemView {
 		});
 		row.addEventListener('dragend', () => {
 			row.classList.remove('cn-dragging');
+			this.clearDropIndicator();
 			this.draggedPath = null;
 		});
 		row.addEventListener('dragover', (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			if (!this.draggedPath) return;
-			if (this.draggedPath === file.path) return;
-			if (this.wouldMoveIntoSelf(this.draggedPath, file)) return;
-			row.classList.add('cn-drag-over');
+			if (!this.draggedPath || this.draggedPath === file.path) {
+				this.clearDropIndicator();
+				return;
+			}
+			if (this.wouldMoveIntoSelf(this.draggedPath, file)) {
+				this.clearDropIndicator();
+				return;
+			}
+
+			const rect = row.getBoundingClientRect();
+			const ratio = (e.clientY - rect.top) / rect.height;
+			const mode: DropMode = ratio < 0.3 ? 'before' : ratio > 0.7 ? 'after' : 'nest';
+			this.setDropIndicator(row, mode);
 		});
 		row.addEventListener('dragleave', (e) => {
 			const related = e.relatedTarget as Node | null;
 			if (!related || !row.contains(related)) {
-				row.classList.remove('cn-drag-over');
+				this.clearDropIndicator();
 			}
 		});
 		row.addEventListener('drop', (e) => {
 			e.preventDefault();
-			row.classList.remove('cn-drag-over');
+			const mode = this.dropMode;
+			this.clearDropIndicator();
 			const dragged = e.dataTransfer?.getData('text/plain') ?? this.draggedPath;
 			if (!dragged || dragged === file.path) return;
 			if (this.wouldMoveIntoSelf(dragged, file)) return;
-			void this.nestNote(dragged, file);
+			if (mode === 'nest' || !mode) {
+				void this.runBatched(() => this.nestNote(dragged, file));
+			} else {
+				void this.runBatched(() => this.insertNoteRelative(dragged, file, mode));
+			}
 			this.dropHandled = true;
 		});
 
@@ -350,10 +379,23 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private sortNodes(nodes: NoteNode[]): void {
-		nodes.sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+		nodes.sort((a, b) => {
+			const ak = this.nodeOrderKey(a);
+			const bk = this.nodeOrderKey(b);
+			if (ak !== bk) return ak - bk;
+			return this.nodeSortName(a).localeCompare(this.nodeSortName(b));
+		});
 		for (const node of nodes) {
 			this.sortNodes(node.children);
 		}
+	}
+
+	private nodeOrderKey(node: NoteNode): number {
+		return this.parseOrderIndex(this.nodeSortName(node)) ?? Number.MAX_SAFE_INTEGER;
+	}
+
+	private nodeSortName(node: NoteNode): string {
+		return node.folder ? node.folder.name : node.file.basename;
 	}
 
 	private hasCanonicalAncestor(file: TFile, canonicalNodes: Map<string, NoteNode>): boolean {
@@ -367,9 +409,11 @@ export class NestedNotesView extends ItemView {
 
 	private async createTopLevelNote(): Promise<void> {
 		const parentFolder = this.app.fileManager.getNewFileParent('');
-		const file = await this.createNoteInFolder(this.folderPath(parentFolder), 'Untitled');
+		const parentPath = this.folderPath(parentFolder);
+		const file = await this.createNoteInFolder(parentPath, 'Untitled');
 		await this.openNote(file);
 		this.promptForNoteRename(file);
+		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
 	}
@@ -379,6 +423,7 @@ export class NestedNotesView extends ItemView {
 		const file = await this.createNoteInFolder(parentFolder.path, 'Untitled');
 		await this.openNote(file);
 		this.promptForNoteRename(file);
+		await this.renumberSiblings(parentFolder.path);
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
 	}
@@ -397,8 +442,8 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private promptForNoteRename(file: TFile): void {
-		new NoteNameModal(this.app, file.basename, async (name) => {
-			await this.renameNote(file, name);
+		new NoteNameModal(this.app, this.displayBasename(file), async (name) => {
+			await this.runBatched(() => this.renameNote(file, name));
 		}).open();
 	}
 
@@ -439,6 +484,21 @@ export class NestedNotesView extends ItemView {
 		);
 		menu.addSeparator();
 		menu.addItem(item => item
+			.setTitle('Move up')
+			.setIcon('arrow-up')
+			.onClick(() => {
+				void this.runBatched(() => this.reorderNote(file, 'up'));
+			})
+		);
+		menu.addItem(item => item
+			.setTitle('Move down')
+			.setIcon('arrow-down')
+			.onClick(() => {
+				void this.runBatched(() => this.reorderNote(file, 'down'));
+			})
+		);
+		menu.addSeparator();
+		menu.addItem(item => item
 			.setTitle('Rename...')
 			.setIcon('pencil')
 			.onClick(() => this.promptForNoteRename(file))
@@ -447,7 +507,7 @@ export class NestedNotesView extends ItemView {
 			.setTitle('Delete')
 			.setIcon('trash')
 			.onClick(() => {
-				void this.deleteNote(file);
+				void this.runBatched(() => this.deleteNote(file));
 			})
 		);
 
@@ -467,8 +527,12 @@ export class NestedNotesView extends ItemView {
 		if (!folder) throw new Error('Could not resolve note folder.');
 
 		const newName = this.sanitizeNoteName(name);
+		const existingIndex = this.parseOrderIndex(folder.name);
+		const newFolderName = existingIndex !== null
+			? this.formatOrderName(existingIndex, newName)
+			: newName;
 		const parentPath = this.folderPath(folder.parent);
-		const targetFolderPath = this.getAvailableFolderPath(parentPath, newName, folder.path);
+		const targetFolderPath = this.getAvailableFolderPath(parentPath, newFolderName, folder.path);
 
 		let fileAfterFolderMove = canonicalFile;
 		if (targetFolderPath !== folder.path) {
@@ -487,7 +551,9 @@ export class NestedNotesView extends ItemView {
 
 	private async deleteNote(file: TFile): Promise<void> {
 		const folder = this.getCanonicalNoteFolder(file);
+		const parentPath = folder ? this.folderPath(folder.parent) : '';
 		await this.app.fileManager.trashFile(folder ?? file);
+		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
 	}
@@ -496,8 +562,15 @@ export class NestedNotesView extends ItemView {
 		const file = this.app.vault.getFileByPath(path);
 		if (!file) return;
 
+		const sourceFolder = this.getCanonicalNoteFolder(file);
+		const sourceParent = sourceFolder ? this.folderPath(sourceFolder.parent) : '';
 		const topLevelParent = this.app.fileManager.getNewFileParent('');
-		await this.moveNoteToParentFolder(file, this.folderPath(topLevelParent));
+		const targetParent = this.folderPath(topLevelParent);
+		await this.moveNoteToParentFolder(file, targetParent);
+		if (sourceParent && sourceParent !== targetParent) {
+			await this.renumberSiblings(sourceParent);
+		}
+		await this.renumberSiblings(targetParent);
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
 	}
@@ -506,8 +579,16 @@ export class NestedNotesView extends ItemView {
 		const childFile = this.app.vault.getFileByPath(childPath);
 		if (!childFile) return;
 
+		const childFolder = this.getCanonicalNoteFolder(childFile);
+		const childParent = childFolder ? this.folderPath(childFolder.parent) : '';
+
 		const parentFolder = await this.ensureCanonicalNoteFolder(parentFile);
 		await this.moveNoteToParentFolder(childFile, parentFolder.path);
+
+		if (childParent && childParent !== parentFolder.path) {
+			await this.renumberSiblings(childParent);
+		}
+		await this.renumberSiblings(parentFolder.path);
 
 		const collapsedIdx = this.plugin.data.collapsed.indexOf(parentFile.path);
 		if (collapsedIdx >= 0) {
@@ -602,6 +683,169 @@ export class NestedNotesView extends ItemView {
 		return folder.name === file.basename ? folder : null;
 	}
 
+	private parseOrderIndex(name: string): number | null {
+		const match = name.match(ORDER_PREFIX_RE);
+		if (!match) return null;
+		const value = parseInt(match[1] ?? '', 10);
+		return Number.isNaN(value) ? null : value;
+	}
+
+	private stripOrderPrefix(name: string): string {
+		const match = name.match(ORDER_PREFIX_RE);
+		return match ? (match[2] ?? '') : name;
+	}
+
+	private formatOrderName(index: number, name: string): string {
+		return `${index} ${name}`;
+	}
+
+	private displayBasename(file: TFile): string {
+		return this.stripOrderPrefix(file.basename);
+	}
+
+	private isCanonicalNoteFolder(folder: TFolder): boolean {
+		return folder.children.some(
+			(child): child is TFile =>
+				child instanceof TFile && child.extension === 'md' && child.basename === folder.name
+		);
+	}
+
+	private getChildNoteFolders(parentFolderPath: string): TFolder[] {
+		const parent = parentFolderPath
+			? this.app.vault.getFolderByPath(parentFolderPath)
+			: this.app.vault.getRoot();
+		if (!parent) return [];
+		return parent.children.filter(
+			(child): child is TFolder => child instanceof TFolder && this.isCanonicalNoteFolder(child)
+		);
+	}
+
+	private sortFoldersByName(folders: TFolder[]): TFolder[] {
+		return [...folders].sort((a, b) => {
+			const ai = this.parseOrderIndex(a.name) ?? Number.MAX_SAFE_INTEGER;
+			const bi = this.parseOrderIndex(b.name) ?? Number.MAX_SAFE_INTEGER;
+			if (ai !== bi) return ai - bi;
+			return a.name.localeCompare(b.name);
+		});
+	}
+
+	private async reorderNote(file: TFile, direction: 'up' | 'down'): Promise<void> {
+		const folder = this.getCanonicalNoteFolder(file);
+		if (!folder) return;
+
+		const parentPath = this.folderPath(folder.parent);
+		const siblings = this.sortFoldersByName(this.getChildNoteFolders(parentPath));
+		const currentIndex = siblings.findIndex(sibling => sibling.path === folder.path);
+		if (currentIndex < 0) return;
+
+		const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+		if (targetIndex < 0 || targetIndex >= siblings.length) return;
+
+		const [moved] = siblings.splice(currentIndex, 1);
+		if (!moved) return;
+		siblings.splice(targetIndex, 0, moved);
+
+		await this.applyOrder(siblings, parentPath);
+		await this.syncAllChildLinkBlocks();
+		this.renderTree();
+	}
+
+	private async renumberSiblings(parentFolderPath: string): Promise<void> {
+		const siblings = this.sortFoldersByName(this.getChildNoteFolders(parentFolderPath));
+		if (siblings.length === 0) return;
+		await this.applyOrder(siblings, parentFolderPath);
+	}
+
+	private async insertNoteRelative(draggedPath: string, targetFile: TFile, position: 'before' | 'after'): Promise<void> {
+		const draggedFile = this.app.vault.getFileByPath(draggedPath);
+		if (!draggedFile) return;
+
+		const targetFolder = this.getCanonicalNoteFolder(targetFile);
+		if (!targetFolder) return;
+		if (this.wouldMoveIntoSelf(draggedPath, targetFile)) return;
+
+		const targetParentPath = this.folderPath(targetFolder.parent);
+
+		const draggedFolder = this.getCanonicalNoteFolder(draggedFile);
+		const sourceParentPath = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
+
+		let movedFile = draggedFile;
+		if (sourceParentPath !== targetParentPath) {
+			movedFile = await this.moveNoteToParentFolder(draggedFile, targetParentPath);
+		}
+
+		const movedFolder = this.getCanonicalNoteFolder(movedFile);
+		if (!movedFolder) return;
+
+		const siblings = this.sortFoldersByName(this.getChildNoteFolders(targetParentPath));
+		const filtered = siblings.filter(sibling => sibling.path !== movedFolder.path);
+		const targetIndex = filtered.findIndex(sibling => sibling.path === targetFolder.path);
+
+		if (targetIndex < 0) {
+			await this.renumberSiblings(targetParentPath);
+		} else {
+			const insertAt = position === 'before' ? targetIndex : targetIndex + 1;
+			filtered.splice(insertAt, 0, movedFolder);
+			await this.applyOrder(filtered, targetParentPath);
+		}
+
+		if (sourceParentPath && sourceParentPath !== targetParentPath) {
+			await this.renumberSiblings(sourceParentPath);
+		}
+
+		await this.syncAllChildLinkBlocks();
+		this.renderTree();
+	}
+
+	private setDropIndicator(row: HTMLElement, mode: DropMode): void {
+		if (this.dropRow === row && this.dropMode === mode) return;
+		this.clearDropIndicator();
+		row.classList.add(
+			mode === 'before' ? 'cn-insert-before'
+				: mode === 'after' ? 'cn-insert-after'
+					: 'cn-drag-over'
+		);
+		this.dropRow = row;
+		this.dropMode = mode;
+	}
+
+	private clearDropIndicator(): void {
+		if (this.dropRow) {
+			this.dropRow.classList.remove('cn-insert-before', 'cn-insert-after', 'cn-drag-over');
+		}
+		this.dropRow = null;
+		this.dropMode = null;
+	}
+
+	private async applyOrder(folders: TFolder[], parentFolderPath: string): Promise<void> {
+		if (folders.length === 0) return;
+
+		const tempSuffix = `__reorder_${Date.now().toString(36)}__`;
+		const entries = folders.map((folder, i) => {
+			const finalName = this.formatOrderName(i + 1, this.stripOrderPrefix(folder.name));
+			return {
+				source: folder,
+				finalName,
+				tempPath: this.joinPath(parentFolderPath, `${tempSuffix}${i}`),
+				finalPath: this.joinPath(parentFolderPath, finalName),
+			};
+		});
+
+		for (const entry of entries) {
+			if (entry.source.path !== entry.tempPath) {
+				await this.app.fileManager.renameFile(entry.source, entry.tempPath);
+			}
+		}
+
+		for (const entry of entries) {
+			const tempFolder = this.app.vault.getFolderByPath(entry.tempPath) ?? entry.source;
+			if (tempFolder.path !== entry.finalPath) {
+				await this.app.fileManager.renameFile(tempFolder, entry.finalPath);
+			}
+			await this.ensureMainFileMatchesFolder(entry.finalPath, `${entry.finalName}.md`);
+		}
+	}
+
 	private getAvailableFolderPath(parentFolderPath: string, preferredName: string, currentPath?: string): string {
 		const baseName = this.sanitizeNoteName(preferredName);
 		const normalizedCurrentPath = currentPath ? this.normalizeVaultPath(currentPath) : null;
@@ -642,6 +886,15 @@ export class NestedNotesView extends ItemView {
 		this.renderTree();
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
+	}
+
+	private async runBatched(task: () => Promise<void>): Promise<void> {
+		this.suppressEvents = true;
+		try {
+			await task();
+		} finally {
+			this.suppressEvents = false;
+		}
 	}
 
 	private async migrateLegacyChildren(): Promise<void> {
@@ -716,7 +969,7 @@ export class NestedNotesView extends ItemView {
 				child.file,
 				node.file.path,
 				undefined,
-				child.file.basename
+				this.displayBasename(child.file)
 			);
 			return `> - ${link}`;
 		});
