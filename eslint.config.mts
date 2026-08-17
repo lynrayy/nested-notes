@@ -11,20 +11,22 @@ export default tseslint.config(
 			},
 			parserOptions: {
 				projectService: {
-					allowDefaultProject: [
-						'eslint.config.js',
-						'manifest.json'
-					]
+				allowDefaultProject: [
+					'eslint.config.js',
+					'eslint.config.mts',
+					'manifest.json'
+				]
 				},
-				tsconfigRootDir: import.meta.dirname,
+				tsconfigRootDir: import.meta.dirname as string,
 				extraFileExtensions: ['.json']
 			},
 		},
 	},
 	...obsidianmd.configs.recommended,
 	{
+		files: ["**/*.ts"],
 		rules: {
-			"obsidianmd/no-unsupported-api": "off",
+			"obsidianmd/no-unsupported-api": "error",
 		},
 	},
 	globalIgnores([
