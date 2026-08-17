@@ -1,6 +1,6 @@
 {
 	"name": "nested-notes-rework",
-	"version": "2.2.2",
+	"version": "2.2.3",
 	"description": "Nest notes under other notes with drag-and-drop and collapse/expand. Manual rearrange supported. For Obsidian (https://obsidian.md)",
 	"main": "main.js",
 	"type": "module",

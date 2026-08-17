@@ -1,5 +1,10 @@
 # Change Log 
 
+## 2.2.3
+- Fixed: Newly created notes had no order index, and an index was not regenerated
+  after a rename, so manual ordering/reordering did not work. `renameNote` now
+  renumbers the note's siblings, (re)assigning the index on every rename.
+
 ## 2.2.2
 - Change: Dragging a note from the panel into a note's text now inserts a link
   to that note (for example `[[My note]]`) showing only the note name, instead of

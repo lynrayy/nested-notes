@@ -554,6 +554,10 @@ export class NestedNotesView extends ItemView {
 		// The folder keeps the order index, the file only gets the plain name.
 		await this.ensureMainFileMatchesFolder(targetFolderPath, canonicalFile.name);
 
+		// (Re)assign order indices to the siblings so a note that had no index
+		// (e.g. a freshly created one) gets one and manual ordering keeps working.
+		await this.renumberSiblings(parentPath);
+
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
 	}
@@ -1043,8 +1047,8 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private async migrateLegacyChildren(): Promise<void> {
-		const legacyChildren = this.plugin.consumeLegacyChildren();
-		if (!legacyChildren) return;
+		const legacyChildren: Record<string, string[]> = this.plugin.consumeLegacyChildren() ?? {};
+		if (Object.keys(legacyChildren).length === 0) return;
 
 		const legacyPaths = new Set<string>();
 		for (const [parentPath, childPaths] of Object.entries(legacyChildren)) {
@@ -1171,7 +1175,7 @@ export class NestedNotesView extends ItemView {
 			`(?:\\r?\\n)*${this.escapeRegExp(LEGACY_CHILD_LINKS_START)}[\\s\\S]*?${this.escapeRegExp(LEGACY_CHILD_LINKS_END)}(?:\\r?\\n)*`,
 			'g'
 		);
-		const contentWithoutBlock = content
+		const contentWithoutBlock: string = content
 			.replace(calloutRegex, '')
 			.replace(legacyRegex, '')
 			.trimEnd();
