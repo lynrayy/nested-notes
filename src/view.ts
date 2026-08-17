@@ -1050,8 +1050,9 @@ export class NestedNotesView extends ItemView {
 		const legacyChildren: Record<string, string[]> = this.plugin.consumeLegacyChildren() ?? {};
 		if (Object.keys(legacyChildren).length === 0) return;
 
+		const entries: Array<[string, string[]]> = Object.entries(legacyChildren);
 		const legacyPaths = new Set<string>();
-		for (const [parentPath, childPaths] of Object.entries(legacyChildren)) {
+		for (const [parentPath, childPaths] of entries) {
 			legacyPaths.add(parentPath);
 			for (const childPath of childPaths) {
 				legacyPaths.add(childPath);
@@ -1066,7 +1067,7 @@ export class NestedNotesView extends ItemView {
 			}
 		}
 
-		for (const [parentPath, childPaths] of Object.entries(legacyChildren)) {
+		for (const [parentPath, childPaths] of entries) {
 			const parentFile = migratedFiles.get(parentPath);
 			if (!parentFile) continue;
 
@@ -1175,7 +1176,8 @@ export class NestedNotesView extends ItemView {
 			`(?:\\r?\\n)*${this.escapeRegExp(LEGACY_CHILD_LINKS_START)}[\\s\\S]*?${this.escapeRegExp(LEGACY_CHILD_LINKS_END)}(?:\\r?\\n)*`,
 			'g'
 		);
-		const contentWithoutBlock: string = content
+		const sourceContent: string = content;
+		const contentWithoutBlock: string = sourceContent
 			.replace(calloutRegex, '')
 			.replace(legacyRegex, '')
 			.trimEnd();
