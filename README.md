@@ -58,11 +58,4 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 
 
 ## Support Me 
-
-This plugin is provided to everyone for free.
-
-If you would like to say thanks or support continued development, feel free to buy me a bubble tea 🧋. 
-
-<a href="https://www.buymeacoffee.com/octoberlearns">
-  <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20bubble%20tea&slug=octoberlearns&button_colour=FF5F5F&font_colour=FFFFFF&font_family=Poppins&outline_colour=FFFFFF&coffee_colour=d39f6f" alt="Buy Me A Bubble Tea" width="200">
-</a>
+-
