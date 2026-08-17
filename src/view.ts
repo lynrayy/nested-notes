@@ -153,7 +153,7 @@ export class NestedNotesView extends ItemView {
 				return;
 			}
 
-			const dragged = e.dataTransfer?.getData('text/plain') ?? this.draggedPath;
+			const dragged = this.draggedPath ?? e.dataTransfer?.getData('text/plain');
 			if (!dragged) return;
 			void this.runBatched(() => this.promoteToTopLevel(dragged));
 		});
@@ -298,7 +298,9 @@ export class NestedNotesView extends ItemView {
 			e.stopPropagation();
 			this.draggedPath = file.path;
 			this.dropHandled = false;
-			e.dataTransfer?.setData('text/plain', file.path);
+			// For drops into a note's text, expose a markdown link that shows
+			// only the note name instead of the full vault path.
+			e.dataTransfer?.setData('text/plain', this.getDragLinkText(file));
 			row.classList.add('cn-dragging');
 		});
 		row.addEventListener('dragend', () => {
@@ -336,7 +338,7 @@ export class NestedNotesView extends ItemView {
 			e.stopPropagation();
 			const mode = this.dropMode;
 			this.clearDropIndicator();
-			const dragged = e.dataTransfer?.getData('text/plain') ?? this.draggedPath;
+			const dragged = this.draggedPath ?? e.dataTransfer?.getData('text/plain');
 			if (!dragged || dragged === file.path) return;
 			if (this.wouldMoveIntoSelf(dragged, file)) return;
 			if (mode === 'nest' || !mode) {
@@ -742,6 +744,14 @@ export class NestedNotesView extends ItemView {
 	private displayBasename(file: TFile): string {
 		const folder = this.getCanonicalNoteFolder(file);
 		return folder ? this.stripOrderPrefix(folder.name) : file.basename;
+	}
+
+	/** Markdown link used when a note is dragged into a note's text. */
+	private getDragLinkText(file: TFile): string {
+		const display = this.displayBasename(file);
+		const alias = file.basename === display ? undefined : display;
+		const sourcePath = this.app.workspace.getActiveFile()?.path ?? '';
+		return this.app.fileManager.generateMarkdownLink(file, sourcePath, undefined, alias);
 	}
 
 	private isCanonicalNoteFolder(folder: TFolder): boolean {

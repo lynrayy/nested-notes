@@ -1,5 +1,10 @@
 # Change Log 
 
+## 2.2.2
+- Change: Dragging a note from the panel into a note's text now inserts a link
+  to that note (for example `[[My note]]`) showing only the note name, instead of
+  the full vault path. Reordering notes inside the panel still uses the file path.
+
 ## 2.2.1
 - Fixed: Dragging a note no longer accidentally drops it at the vault root. A drop
   on a note row now stops propagation so it is never treated as a drop on empty
