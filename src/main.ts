@@ -73,6 +73,7 @@ export default class NestedNotesPlugin extends Plugin {
 			collapsed: saved?.collapsed ?? DEFAULT_DATA.collapsed,
 			showFileIcon: saved?.showFileIcon ?? DEFAULT_DATA.showFileIcon,
 			showFolderPath: saved?.showFolderPath ?? DEFAULT_DATA.showFolderPath,
+			fileIndexMigrated: saved?.fileIndexMigrated ?? DEFAULT_DATA.fileIndexMigrated,
 		};
 	}
 

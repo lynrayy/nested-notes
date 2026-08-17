@@ -39,6 +39,18 @@ You can activate this plugin within Obsidian by doing the following:
 
 ![2.1.3 demo](/media/Demo%202.1.3.jpg)
 
+### 2.2.0
+- Change: The sort index now lives only on the folder, so note titles stay clean
+
+  A note is stored as `3 My note/My note.md`: the folder keeps the `3` used for
+  sorting, while the note file itself has no number. The index no longer shows up
+  in the tab title or in the note's inline title.
+- Change: Notes without an index are still shown in the hierarchy (sorted last)
+- Added: Folder and note names are kept in sync when you rename either one,
+  including renames from the tab title, inline title or file explorer
+- Added: One-time migration that moves the index off existing note files
+  (links are preserved)
+
 
 ## License 
 

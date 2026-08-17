@@ -4,6 +4,7 @@ import {
 	Menu,
 	Modal,
 	Notice,
+	TAbstractFile,
 	TFile,
 	TFolder,
 	WorkspaceLeaf,
@@ -101,7 +102,7 @@ export class NestedNotesView extends ItemView {
 	private dropHandled = false;
 	private dropRow: HTMLElement | null = null;
 	private dropMode: DropMode | null = null;
-	private suppressEvents = false;
+	private suppressDepth = 0;
 	private activeFilePath: string | null = null;
 	private activeMenu: Menu | null = null;
 	private activeMenuPath: string | null = null;
@@ -159,19 +160,19 @@ export class NestedNotesView extends ItemView {
 
 		this.registerEvent(
 			this.app.vault.on('create', () => {
-				if (this.suppressEvents) return;
+				if (this.suppressDepth > 0) return;
 				void this.handleVaultStructureChange();
 			})
 		);
 		this.registerEvent(
-			this.app.vault.on('rename', () => {
-				if (this.suppressEvents) return;
-				void this.handleVaultStructureChange();
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (this.suppressDepth > 0) return;
+				void this.handleExternalRename(file, oldPath);
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on('delete', () => {
-				if (this.suppressEvents) return;
+				if (this.suppressDepth > 0) return;
 				void this.handleVaultStructureChange();
 			})
 		);
@@ -183,9 +184,12 @@ export class NestedNotesView extends ItemView {
 			})
 		);
 
-		await this.migrateLegacyChildren();
-		await this.cleanupTempFolders();
-		await this.syncAllChildLinkBlocks();
+		await this.runBatched(async () => {
+			await this.migrateLegacyChildren();
+			await this.migrateNoteFileIndices();
+			await this.cleanupTempFolders();
+			await this.syncAllChildLinkBlocks();
+		});
 		this.activeFilePath = this.app.workspace.getActiveFile()?.path ?? null;
 		this.renderTree();
 	}
@@ -293,6 +297,7 @@ export class NestedNotesView extends ItemView {
 		row.addEventListener('dragstart', (e) => {
 			e.stopPropagation();
 			this.draggedPath = file.path;
+			this.dropHandled = false;
 			e.dataTransfer?.setData('text/plain', file.path);
 			row.classList.add('cn-dragging');
 		});
@@ -300,6 +305,7 @@ export class NestedNotesView extends ItemView {
 			row.classList.remove('cn-dragging');
 			this.clearDropIndicator();
 			this.draggedPath = null;
+			this.dropHandled = false;
 		});
 		row.addEventListener('dragover', (e) => {
 			e.preventDefault();
@@ -317,22 +323,6 @@ export class NestedNotesView extends ItemView {
 			const ratio = (e.clientY - rect.top) / rect.height;
 			const mode: DropMode = ratio < 0.4 ? 'before' : ratio > 0.6 ? 'after' : 'nest';
 
-			if (mode !== 'nest') {
-				const draggedFile = this.app.vault.getFileByPath(this.draggedPath);
-				const draggedFolder = draggedFile ? this.getCanonicalNoteFolder(draggedFile) : null;
-				const sourceParent = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
-				const targetFolder = this.getCanonicalNoteFolder(file);
-				const targetParent = targetFolder ? this.folderPath(targetFolder.parent) : '';
-				const sameParent = sourceParent === targetParent;
-				const targetIsAncestor = draggedFolder && targetFolder
-					? this.isSameOrDescendantPath(draggedFolder.path, targetFolder.path)
-					: false;
-				if (!sameParent && !targetIsAncestor) {
-					this.clearDropIndicator();
-					return;
-				}
-			}
-
 			this.setDropIndicator(row, mode);
 		});
 		row.addEventListener('dragleave', (e) => {
@@ -343,6 +333,7 @@ export class NestedNotesView extends ItemView {
 		});
 		row.addEventListener('drop', (e) => {
 			e.preventDefault();
+			e.stopPropagation();
 			const mode = this.dropMode;
 			this.clearDropIndicator();
 			const dragged = e.dataTransfer?.getData('text/plain') ?? this.draggedPath;
@@ -453,8 +444,7 @@ export class NestedNotesView extends ItemView {
 		const folderPath = this.getAvailableFolderPath(parentFolderPath, preferredName);
 		await this.ensureFolder(folderPath);
 
-		const folderName = this.basenameFromPath(folderPath);
-		const filePath = this.joinPath(folderPath, `${folderName}.md`);
+		const filePath = this.joinPath(folderPath, this.mainNoteFileName(folderPath));
 		return await this.app.vault.create(filePath, '');
 	}
 
@@ -555,16 +545,12 @@ export class NestedNotesView extends ItemView {
 		const parentPath = this.folderPath(folder.parent);
 		const targetFolderPath = this.getAvailableFolderPath(parentPath, newFolderName, folder.path);
 
-		let fileAfterFolderMove = canonicalFile;
 		if (targetFolderPath !== folder.path) {
 			await this.app.fileManager.renameFile(folder, targetFolderPath);
-			fileAfterFolderMove = this.getFileOrThrow(this.joinPath(targetFolderPath, canonicalFile.name));
 		}
 
-		const targetFilePath = this.joinPath(targetFolderPath, `${this.basenameFromPath(targetFolderPath)}.md`);
-		if (fileAfterFolderMove.path !== targetFilePath) {
-			await this.app.fileManager.renameFile(fileAfterFolderMove, targetFilePath);
-		}
+		// The folder keeps the order index, the file only gets the plain name.
+		await this.ensureMainFileMatchesFolder(targetFolderPath, canonicalFile.name);
 
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
@@ -654,26 +640,19 @@ export class NestedNotesView extends ItemView {
 		const folderPath = this.getAvailableFolderPath(parentPath, file.basename);
 		await this.ensureFolder(folderPath);
 
-		const folderName = this.basenameFromPath(folderPath);
-		const targetPath = this.joinPath(folderPath, `${folderName}.md`);
-		await this.app.fileManager.renameFile(file, targetPath);
+		const targetPath = this.joinPath(folderPath, this.mainNoteFileName(folderPath));
+		if (file.path !== targetPath) {
+			await this.app.fileManager.renameFile(file, targetPath);
+		}
 		return this.getFileOrThrow(targetPath);
 	}
 
 	private async ensureMainFileMatchesFolder(folderPath: string, currentFileName: string): Promise<TFile> {
-		const folderName = this.basenameFromPath(folderPath);
-		const expectedPath = this.joinPath(folderPath, `${folderName}.md`);
-		let file = this.app.vault.getFileByPath(this.joinPath(folderPath, currentFileName));
+		const expectedPath = this.joinPath(folderPath, this.mainNoteFileName(folderPath));
+		const file = this.app.vault.getFileByPath(this.joinPath(folderPath, currentFileName))
+			?? this.findMainNoteFile(this.app.vault.getFolderByPath(folderPath));
 
-		if (!file) {
-			const folder = this.app.vault.getFolderByPath(folderPath);
-			const markdownFile = folder?.children.find((child): child is TFile => {
-				return child instanceof TFile && child.extension === 'md';
-			});
-			file = markdownFile ?? null;
-		}
-
-		if (!file) throw new Error('Could not find note file after moving its folder.');
+		if (!file) throw new Error('Could not find the note file inside its folder.');
 		if (file.path === expectedPath) return file;
 
 		await this.app.fileManager.renameFile(file, expectedPath);
@@ -698,10 +677,24 @@ export class NestedNotesView extends ItemView {
 		return folder;
 	}
 
+	/**
+	 * Returns the folder that represents this note, or null when the file is not
+	 * a note's main file.
+	 *
+	 * A folder represents a note when it contains a markdown file named after the
+	 * folder with its order index stripped (`3 My note/My note.md`). Folders whose
+	 * file still carries the index (`3 My note/3 My note.md`) are also accepted so
+	 * that vaults created by older versions keep working before migration.
+	 */
 	private getCanonicalNoteFolder(file: TFile): TFolder | null {
 		const folder = file.parent;
 		if (!folder || folder.isRoot()) return null;
-		return folder.name === file.basename ? folder : null;
+		return this.isMainNoteFileName(folder, file.basename) ? folder : null;
+	}
+
+	/** True when `basename` names the main note file of `folder`. */
+	private isMainNoteFileName(folder: TFolder, basename: string): boolean {
+		return basename === this.stripOrderPrefix(folder.name) || basename === folder.name;
 	}
 
 	private parseOrderIndex(name: string): number | null {
@@ -720,14 +713,43 @@ export class NestedNotesView extends ItemView {
 		return `${index} ${name}`;
 	}
 
+	/**
+	 * File name the main note file of `folderPath` should have: the folder name
+	 * without its order index, so the index never shows up in tab titles or
+	 * inline note headings.
+	 */
+	private mainNoteFileName(folderPath: string): string {
+		return `${this.stripOrderPrefix(this.basenameFromPath(folderPath))}.md`;
+	}
+
+	/** Finds the main markdown file of a note folder, tolerating name mismatches. */
+	private findMainNoteFile(folder: TFolder | null): TFile | null {
+		if (!folder) return null;
+		const markdownFiles = folder.children.filter(
+			(child): child is TFile => child instanceof TFile && child.extension === 'md'
+		);
+		const strippedName = this.stripOrderPrefix(folder.name);
+		return markdownFiles.find(file => file.basename === strippedName)
+			?? markdownFiles.find(file => file.basename === folder.name)
+			?? markdownFiles[0]
+			?? null;
+	}
+
+	/**
+	 * Name shown in the tree. The note's real name lives in its folder name, so
+	 * the index is stripped from there; loose files are shown as-is.
+	 */
 	private displayBasename(file: TFile): string {
-		return this.stripOrderPrefix(file.basename);
+		const folder = this.getCanonicalNoteFolder(file);
+		return folder ? this.stripOrderPrefix(folder.name) : file.basename;
 	}
 
 	private isCanonicalNoteFolder(folder: TFolder): boolean {
 		return folder.children.some(
 			(child): child is TFile =>
-				child instanceof TFile && child.extension === 'md' && child.basename === folder.name
+				child instanceof TFile
+				&& child.extension === 'md'
+				&& this.isMainNoteFileName(folder, child.basename)
 		);
 	}
 
@@ -790,13 +812,8 @@ export class NestedNotesView extends ItemView {
 		const draggedFolder = this.getCanonicalNoteFolder(draggedFile);
 		const sourceParentPath = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
 
-		if (sourceParentPath !== targetParentPath) {
-			const targetIsAncestor = draggedFolder
-				? this.isSameOrDescendantPath(draggedFolder.path, targetFolder.path)
-				: false;
-			if (!targetIsAncestor) return;
-		}
-
+		// Reordering within the same parent only reorders; moving across parents
+		// first relocates the note to the target's parent, then positions it.
 		let movedFile = draggedFile;
 		if (sourceParentPath !== targetParentPath) {
 			movedFile = await this.moveNoteToParentFolder(draggedFile, targetParentPath);
@@ -871,7 +888,7 @@ export class NestedNotesView extends ItemView {
 				if (tempFolder.path !== finalPath) {
 					await this.app.fileManager.renameFile(tempFolder, finalPath);
 				}
-				await this.ensureMainFileMatchesFolder(finalPath, `${this.basenameFromPath(finalPath)}.md`);
+				await this.ensureMainFileMatchesFolder(finalPath, this.mainNoteFileName(finalPath));
 			}
 		} catch (error) {
 			await this.cleanupTempFolders();
@@ -884,9 +901,7 @@ export class NestedNotesView extends ItemView {
 			.filter((file): file is TFolder => file instanceof TFolder && /^__reorder_/.test(file.name));
 
 		for (const folder of tempFolders) {
-			const markdown = folder.children.find(
-				(child): child is TFile => child instanceof TFile && child.extension === 'md'
-			);
+			const markdown = this.findMainNoteFile(folder);
 			if (!markdown) continue;
 
 			const parentPath = this.folderPath(folder.parent);
@@ -894,7 +909,7 @@ export class NestedNotesView extends ItemView {
 			if (finalName === folder.path) continue;
 
 			await this.app.fileManager.renameFile(folder, finalName);
-			await this.ensureMainFileMatchesFolder(finalName, `${this.basenameFromPath(finalName)}.md`);
+			await this.ensureMainFileMatchesFolder(finalName, markdown.name);
 		}
 	}
 
@@ -940,12 +955,80 @@ export class NestedNotesView extends ItemView {
 		this.renderTree();
 	}
 
+	/**
+	 * Keeps a note folder and its note file in sync after a rename made outside
+	 * the plugin (tab title, inline title, file explorer). The folder always
+	 * carries the order index, the file always carries the plain name.
+	 */
+	private async handleExternalRename(file: TAbstractFile, oldPath: string): Promise<void> {
+		try {
+			await this.runBatched(async () => {
+				if (file instanceof TFile && file.extension === 'md') {
+					await this.syncFolderNameWithNoteFile(file, oldPath);
+				} else if (file instanceof TFolder) {
+					await this.syncNoteFileNameWithFolder(file, oldPath);
+				}
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(message);
+		}
+
+		await this.handleVaultStructureChange();
+	}
+
+	/** Renames the note folder after its note file was renamed in place. */
+	private async syncFolderNameWithNoteFile(file: TFile, oldPath: string): Promise<void> {
+		const folder = file.parent;
+		if (!folder || folder.isRoot()) return;
+
+		// Only in-place renames rename the folder; moves between folders do not.
+		if (this.parentPathFromPath(oldPath) !== this.folderPath(folder)) return;
+
+		// The renamed file must have been this folder's main note file.
+		if (!this.isMainNoteFileName(folder, this.basenameWithoutExtension(oldPath))) return;
+
+		// Nothing to do when the names already match (also breaks rename loops).
+		if (file.basename === this.stripOrderPrefix(folder.name)) return;
+
+		const index = this.parseOrderIndex(folder.name);
+		const newName = this.sanitizeNoteName(file.basename);
+		const targetFolderName = index !== null ? this.formatOrderName(index, newName) : newName;
+		const parentPath = this.folderPath(folder.parent);
+		const targetFolderPath = this.getAvailableFolderPath(parentPath, targetFolderName, folder.path);
+
+		if (targetFolderPath !== folder.path) {
+			await this.app.fileManager.renameFile(folder, targetFolderPath);
+		}
+		await this.ensureMainFileMatchesFolder(targetFolderPath, file.name);
+	}
+
+	/** Renames the note file after its folder was renamed. */
+	private async syncNoteFileNameWithFolder(folder: TFolder, oldPath: string): Promise<void> {
+		if (folder.isRoot()) return;
+
+		const oldFolderName = this.basenameFromPath(oldPath);
+		const oldStrippedName = this.stripOrderPrefix(oldFolderName);
+		const mainFile = folder.children.find(
+			(child): child is TFile => child instanceof TFile
+				&& child.extension === 'md'
+				&& (child.basename === oldStrippedName || child.basename === oldFolderName)
+		);
+		if (!mainFile) return;
+
+		const expectedPath = this.joinPath(folder.path, this.mainNoteFileName(folder.path));
+		if (mainFile.path === expectedPath) return;
+		if (this.app.vault.getAbstractFileByPath(expectedPath)) return;
+
+		await this.app.fileManager.renameFile(mainFile, expectedPath);
+	}
+
 	private async runBatched(task: () => Promise<void>): Promise<void> {
-		this.suppressEvents = true;
+		this.suppressDepth++;
 		try {
 			await task();
 		} finally {
-			this.suppressEvents = false;
+			this.suppressDepth--;
 		}
 	}
 
@@ -984,6 +1067,46 @@ export class NestedNotesView extends ItemView {
 		}
 
 		await this.plugin.savePluginData();
+	}
+
+	/**
+	 * One-time migration from the layout where the order index was part of both
+	 * the folder and its note file (`3 My note/3 My note.md`) to the layout where
+	 * only the folder carries the index (`3 My note/My note.md`), so the index no
+	 * longer shows up in tab titles or inline note headings.
+	 */
+	private async migrateNoteFileIndices(): Promise<void> {
+		if (this.plugin.data.fileIndexMigrated) return;
+
+		const folders = this.app.vault.getAllLoadedFiles().filter(
+			(file): file is TFolder => file instanceof TFolder && !file.isRoot()
+		);
+
+		let renamedCount = 0;
+		for (const folder of folders) {
+			const mainFile = this.findMainNoteFile(folder);
+			// Only touch folders that actually represent a note.
+			if (!mainFile || !this.isMainNoteFileName(folder, mainFile.basename)) continue;
+
+			const expectedName = this.mainNoteFileName(folder.path);
+			if (mainFile.name === expectedName) continue;
+
+			const targetPath = this.joinPath(folder.path, expectedName);
+			if (this.app.vault.getAbstractFileByPath(targetPath)) continue;
+
+			// renameFile keeps every existing link to this note intact.
+			await this.app.fileManager.renameFile(mainFile, targetPath);
+			renamedCount++;
+		}
+
+		this.plugin.data.fileIndexMigrated = true;
+		await this.plugin.savePluginData();
+
+		if (renamedCount > 0) {
+			new Notice(
+				`Nested notes: moved the order index onto the folder for ${renamedCount} ${renamedCount === 1 ? 'note' : 'notes'}.`
+			);
+		}
 	}
 
 	private async syncAllChildLinkBlocks(): Promise<void> {
@@ -1087,6 +1210,20 @@ export class NestedNotesView extends ItemView {
 	private basenameFromPath(path: string): string {
 		const normalized = this.normalizeVaultPath(path);
 		return normalized.split('/').pop() ?? normalized;
+	}
+
+	/** Folder that contains `path`, as a vault-relative path ('' for the root). */
+	private parentPathFromPath(path: string): string {
+		const normalized = this.normalizeVaultPath(path);
+		const separatorIndex = normalized.lastIndexOf('/');
+		return separatorIndex < 0 ? '' : normalized.slice(0, separatorIndex);
+	}
+
+	/** File name of `path` without its extension. */
+	private basenameWithoutExtension(path: string): string {
+		const name = this.basenameFromPath(path);
+		const dotIndex = name.lastIndexOf('.');
+		return dotIndex > 0 ? name.slice(0, dotIndex) : name;
 	}
 
 	private sanitizeNoteName(name: string): string {
