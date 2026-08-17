@@ -15,6 +15,14 @@
 	position: relative;
 }
 
+.cn-note-row.cn-active {
+	background-color: var(--nav-item-background-active, var(--background-modifier-hover));
+}
+
+.cn-note-row.cn-active .cn-name {
+	color: var(--nav-item-color-active, var(--text-normal));
+}
+
 .cn-note-row.cn-insert-before::before,
 .cn-note-row.cn-insert-after::after {
 	content: '';
@@ -73,7 +81,13 @@
 	align-items: center;
 }
 
+.cn-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
 .cn-name {
+	min-width: 0;
 	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -83,14 +97,22 @@
 }
 
 .cn-actions {
+	position: absolute;
+	right: 2px;
+	top: 50%;
+	transform: translateY(-50%);
 	display: flex;
 	align-items: center;
 	gap: 2px;
 	flex-shrink: 0;
-	margin-left: 4px;
 	opacity: 0;
 	pointer-events: none;
 	visibility: hidden;
+}
+
+.cn-note-row:hover .cn-name,
+.cn-note-row:focus-within .cn-name {
+	padding-right: 46px;
 }
 
 .cn-note-row:hover .cn-actions,

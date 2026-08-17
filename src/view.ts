@@ -102,6 +102,7 @@ export class NestedNotesView extends ItemView {
 	private dropRow: HTMLElement | null = null;
 	private dropMode: DropMode | null = null;
 	private suppressEvents = false;
+	private activeFilePath: string | null = null;
 	private activeMenu: Menu | null = null;
 	private activeMenuPath: string | null = null;
 
@@ -175,8 +176,16 @@ export class NestedNotesView extends ItemView {
 			})
 		);
 
+		this.registerEvent(
+			this.app.workspace.on('file-open', (file) => {
+				this.activeFilePath = file ? file.path : null;
+				this.renderTree();
+			})
+		);
+
 		await this.migrateLegacyChildren();
 		await this.syncAllChildLinkBlocks();
+		this.activeFilePath = this.app.workspace.getActiveFile()?.path ?? null;
 		this.renderTree();
 	}
 
@@ -206,7 +215,7 @@ export class NestedNotesView extends ItemView {
 		const isCollapsed = this.plugin.data.collapsed.includes(file.path);
 
 		const row = container.createDiv({
-			cls: 'cn-note-row',
+			cls: this.activeFilePath === file.path ? 'cn-note-row cn-active' : 'cn-note-row',
 			attr: {'draggable': 'true', 'data-path': file.path},
 		});
 
@@ -221,15 +230,17 @@ export class NestedNotesView extends ItemView {
 			row.createSpan({cls: 'cn-toggle-spacer'});
 		}
 
+		const iconSpan = row.createSpan({cls: 'cn-icon'});
 		if (this.plugin.data.showFileIcon) {
-			const iconSpan = row.createSpan({cls: 'cn-icon'});
 			const nativeSvg = document
 				.querySelector(`.nav-file-title[data-path="${CSS.escape(file.path)}"] svg`);
 			if (nativeSvg) {
 				iconSpan.appendChild(nativeSvg.cloneNode(true));
 			} else {
-				setIcon(iconSpan, 'file');
+				setIcon(iconSpan, children.length > 0 ? 'file-text' : 'file');
 			}
+		} else {
+			setIcon(iconSpan, children.length > 0 ? 'file-text' : 'file');
 		}
 
 		const nameWrap = row.createSpan({cls: 'cn-name'});
@@ -311,12 +322,29 @@ export class NestedNotesView extends ItemView {
 
 			const rect = row.getBoundingClientRect();
 			const ratio = (e.clientY - rect.top) / rect.height;
-			const mode: DropMode = ratio < 0.3 ? 'before' : ratio > 0.7 ? 'after' : 'nest';
+			const mode: DropMode = ratio < 0.4 ? 'before' : ratio > 0.6 ? 'after' : 'nest';
+
+			if (mode !== 'nest') {
+				const draggedFile = this.app.vault.getFileByPath(this.draggedPath);
+				const draggedFolder = draggedFile ? this.getCanonicalNoteFolder(draggedFile) : null;
+				const sourceParent = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
+				const targetFolder = this.getCanonicalNoteFolder(file);
+				const targetParent = targetFolder ? this.folderPath(targetFolder.parent) : '';
+				const sameParent = sourceParent === targetParent;
+				const targetIsAncestor = draggedFolder && targetFolder
+					? this.isSameOrDescendantPath(draggedFolder.path, targetFolder.path)
+					: false;
+				if (!sameParent && !targetIsAncestor) {
+					this.clearDropIndicator();
+					return;
+				}
+			}
+
 			this.setDropIndicator(row, mode);
 		});
 		row.addEventListener('dragleave', (e) => {
 			const related = e.relatedTarget as Node | null;
-			if (!related || !row.contains(related)) {
+			if (related && !row.contains(related)) {
 				this.clearDropIndicator();
 			}
 		});
@@ -768,6 +796,13 @@ export class NestedNotesView extends ItemView {
 
 		const draggedFolder = this.getCanonicalNoteFolder(draggedFile);
 		const sourceParentPath = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
+
+		if (sourceParentPath !== targetParentPath) {
+			const targetIsAncestor = draggedFolder
+				? this.isSameOrDescendantPath(draggedFolder.path, targetFolder.path)
+				: false;
+			if (!targetIsAncestor) return;
+		}
 
 		let movedFile = draggedFile;
 		if (sourceParentPath !== targetParentPath) {
