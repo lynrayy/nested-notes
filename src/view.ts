@@ -1047,10 +1047,9 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private async migrateLegacyChildren(): Promise<void> {
-		const legacyChildren: Record<string, string[]> = this.plugin.consumeLegacyChildren() ?? {};
-		if (Object.keys(legacyChildren).length === 0) return;
+		const entries = this.normalizeLegacyChildren(this.plugin.consumeLegacyChildren());
+		if (entries.length === 0) return;
 
-		const entries: Array<[string, string[]]> = Object.entries(legacyChildren);
 		const legacyPaths = new Set<string>();
 		for (const [parentPath, childPaths] of entries) {
 			legacyPaths.add(parentPath);
@@ -1082,6 +1081,29 @@ export class NestedNotesView extends ItemView {
 		}
 
 		await this.plugin.savePluginData();
+	}
+
+	/**
+	 * Validates the untyped legacy children data (loaded from data.json) and
+	 * returns it as a fully typed list of `[parentPath, childPaths]` pairs, so
+	 * no `any` values flow into the typed vault APIs below.
+	 */
+	private normalizeLegacyChildren(raw: unknown): Array<[string, string[]]> {
+		if (!raw || typeof raw !== 'object') return [];
+
+		const entries: Array<[string, string[]]> = [];
+		for (const [parentPath, childPaths] of Object.entries(raw as Record<string, unknown>)) {
+			if (typeof parentPath !== 'string') continue;
+			if (!Array.isArray(childPaths)) continue;
+
+			const validChildren = childPaths.filter(
+				(childPath): childPath is string => typeof childPath === 'string'
+			);
+			if (validChildren.length > 0) {
+				entries.push([parentPath, validChildren]);
+			}
+		}
+		return entries;
 	}
 
 	/**

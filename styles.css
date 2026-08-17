@@ -122,17 +122,17 @@
 	visibility: visible;
 }
 
-.cn-note-action {
+.cn-note-row button.cn-note-action {
 	appearance: none;
 	width: 20px;
 	height: 20px;
 	min-width: 0;
 	margin: 0;
 	padding: 0;
-	border: none !important;
+	border: none;
 	border-radius: 4px;
-	background: transparent !important;
-	box-shadow: none !important;
+	background: transparent;
+	box-shadow: none;
 	color: var(--text-muted);
 	cursor: pointer;
 	display: flex;
@@ -141,15 +141,15 @@
 	flex-shrink: 0;
 }
 
-.cn-note-action svg {
+.cn-note-row button.cn-note-action svg {
 	width: 14px;
 	height: 14px;
 }
 
-.cn-note-action:hover,
-.cn-note-action:focus-visible {
-	background: transparent !important;
-	box-shadow: none !important;
+.cn-note-row button.cn-note-action:hover,
+.cn-note-row button.cn-note-action:focus-visible {
+	background: transparent;
+	box-shadow: none;
 	color: var(--text-normal);
 }
 
