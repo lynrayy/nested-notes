@@ -19,6 +19,22 @@ interface NoteNode {
 	children: NoteNode[];
 }
 
+/** A single entry in Obsidian's core Bookmarks plugin (partial shape). */
+interface BookmarkItem {
+	type: string;
+	path?: string;
+	title?: string;
+	items?: BookmarkItem[];
+	[key: string]: unknown;
+}
+
+/** Minimal shape of Obsidian's core Bookmarks plugin instance. */
+interface BookmarksPluginInstance {
+	items: BookmarkItem[];
+	addItem(item: BookmarkItem): void;
+	removeItem(item: BookmarkItem): void;
+}
+
 type SubmitNoteName = (name: string) => Promise<void>;
 
 type DropMode = 'before' | 'after' | 'nest';
@@ -520,6 +536,25 @@ export class NestedNotesView extends ItemView {
 		);
 		menu.addSeparator();
 		menu.addItem(item => item
+			.setTitle('Copy link to note')
+			.setIcon('link')
+			.onClick(() => this.copyNoteLink(file))
+		);
+		menu.addItem(item => item
+			.setTitle('Duplicate note')
+			.setIcon('copy')
+			.onClick(() => {
+				void this.runBatched(() => this.duplicateNote(file));
+			})
+		);
+		const isBookmarked = this.isBookmarked(file);
+		menu.addItem(item => item
+			.setTitle(isBookmarked ? 'Remove from bookmarks' : 'Add to bookmarks')
+			.setIcon(isBookmarked ? 'bookmark-minus' : 'bookmark')
+			.onClick(() => this.toggleBookmark(file))
+		);
+		menu.addSeparator();
+		menu.addItem(item => item
 			.setTitle('Rename...')
 			.setIcon('pencil')
 			.onClick(() => this.promptForNoteRename(file))
@@ -540,6 +575,145 @@ export class NestedNotesView extends ItemView {
 		this.activeMenu = null;
 		this.activeMenuPath = null;
 		menu?.hide();
+	}
+
+	/** Copies an Obsidian internal link (`[[note name]]`) for the note. */
+	private copyNoteLink(file: TFile): void {
+		const link = `[[${this.displayBasename(file)}]]`;
+		const clipboard = navigator.clipboard;
+		if (!clipboard) {
+			new Notice('Clipboard is not available.');
+			return;
+		}
+		void clipboard.writeText(link).then(
+			() => new Notice('Link copied to clipboard.'),
+			() => new Notice('Could not copy link to clipboard.')
+		);
+	}
+
+	private async duplicateNote(file: TFile): Promise<void> {
+		const folder = this.getCanonicalNoteFolder(file);
+		if (folder) {
+			await this.duplicateNoteFolder(file, folder);
+		} else {
+			await this.duplicateLooseFile(file);
+		}
+	}
+
+	/** Duplicates a canonical note by copying its folder (and all its files). */
+	private async duplicateNoteFolder(file: TFile, folder: TFolder): Promise<void> {
+		const parentPath = this.folderPath(folder.parent);
+		const baseName = this.stripOrderPrefix(folder.name);
+		const newFolderName = this.getNextDuplicateName(baseName, parentPath);
+		const newFolderPath = this.joinPath(parentPath, newFolderName);
+		await this.ensureFolder(newFolderPath);
+
+		await this.copyFolderContents(folder, newFolderPath);
+		// The copied main note file keeps its old name; align it with the new
+		// folder name so the duplicate is a proper canonical note.
+		await this.ensureMainFileMatchesFolder(newFolderPath, file.name);
+
+		await this.renumberSiblings(parentPath);
+		await this.syncAllChildLinkBlocks();
+		this.renderTree();
+	}
+
+	/** Recursively copies every file and subfolder from `source` into `targetPath`. */
+	private async copyFolderContents(source: TFolder, targetPath: string): Promise<void> {
+		for (const child of source.children) {
+			const childTarget = this.joinPath(targetPath, child.name);
+			if (child instanceof TFolder) {
+				await this.ensureFolder(childTarget);
+				await this.copyFolderContents(child, childTarget);
+			} else if (child instanceof TFile) {
+				await this.app.vault.copy(child, childTarget);
+			}
+		}
+	}
+
+	private getNextDuplicateName(baseName: string, parentPath: string): string {
+		let counter = 1;
+		while (true) {
+			const candidateName = `${baseName} (${counter})`;
+			const candidatePath = this.joinPath(parentPath, candidateName);
+			if (!this.app.vault.getAbstractFileByPath(candidatePath)) return candidateName;
+			counter++;
+		}
+	}
+
+	/** Duplicates a loose file (e.g. a note created outside the plugin). */
+	private async duplicateLooseFile(file: TFile): Promise<void> {
+		const parentPath = this.folderPath(file.parent);
+		const baseName = file.basename;
+		const extension = file.extension;
+		let counter = 1;
+		let targetPath = '';
+		while (true) {
+			const candidateName = `${baseName} (${counter}).${extension}`;
+			targetPath = this.joinPath(parentPath, candidateName);
+			if (!this.app.vault.getAbstractFileByPath(targetPath)) break;
+			counter++;
+		}
+		await this.app.vault.copy(file, targetPath);
+		await this.syncAllChildLinkBlocks();
+		this.renderTree();
+	}
+
+	/**
+	 * Minimal shape of Obsidian's core Bookmarks plugin instance (not in the
+	 * public API). `addItem`/`removeItem` persist and refresh the bookmark view.
+	 */
+	private getBookmarksPlugin(): BookmarksPluginInstance | null {
+		const internal = (this.app as unknown as {
+			internalPlugins?: {
+				getEnabledPluginById(id: string): unknown;
+			};
+		}).internalPlugins;
+		if (!internal) return null;
+
+		const plugin = internal.getEnabledPluginById('bookmarks');
+		if (
+			!plugin
+			|| typeof (plugin as BookmarksPluginInstance).addItem !== 'function'
+			|| typeof (plugin as BookmarksPluginInstance).removeItem !== 'function'
+		) {
+			return null;
+		}
+		return plugin as BookmarksPluginInstance;
+	}
+
+	/** True when the file is already present in Obsidian's native bookmarks. */
+	private isBookmarked(file: TFile): boolean {
+		const plugin = this.getBookmarksPlugin();
+		if (!plugin) return false;
+		return this.findNativeBookmark(plugin.items, file.path) !== null;
+	}
+
+	private findNativeBookmark(items: BookmarkItem[], path: string): BookmarkItem | null {
+		for (const item of items) {
+			if (item.type === 'file' && item.path === path) return item;
+			if (Array.isArray(item.items)) {
+				const found = this.findNativeBookmark(item.items, path);
+				if (found) return found;
+			}
+		}
+		return null;
+	}
+
+	private toggleBookmark(file: TFile): void {
+		const plugin = this.getBookmarksPlugin();
+		if (!plugin) {
+			new Notice('Enable the bookmarks core plugin to bookmark notes.');
+			return;
+		}
+
+		const existing = this.findNativeBookmark(plugin.items, file.path);
+		if (existing) {
+			plugin.removeItem(existing);
+		} else {
+			plugin.addItem({type: 'file', path: file.path});
+		}
+		this.renderTree();
 	}
 
 	private async renameNote(file: TFile, name: string): Promise<void> {
@@ -573,6 +747,7 @@ export class NestedNotesView extends ItemView {
 	private async deleteNote(file: TFile): Promise<void> {
 		const folder = this.getCanonicalNoteFolder(file);
 		const parentPath = folder ? this.folderPath(folder.parent) : '';
+
 		await this.app.fileManager.trashFile(folder ?? file);
 		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
