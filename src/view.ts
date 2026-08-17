@@ -184,6 +184,7 @@ export class NestedNotesView extends ItemView {
 		);
 
 		await this.migrateLegacyChildren();
+		await this.cleanupTempFolders();
 		await this.syncAllChildLinkBlocks();
 		this.activeFilePath = this.app.workspace.getActiveFile()?.path ?? null;
 		this.renderTree();
@@ -230,16 +231,8 @@ export class NestedNotesView extends ItemView {
 			row.createSpan({cls: 'cn-toggle-spacer'});
 		}
 
-		const iconSpan = row.createSpan({cls: 'cn-icon'});
 		if (this.plugin.data.showFileIcon) {
-			const nativeSvg = document
-				.querySelector(`.nav-file-title[data-path="${CSS.escape(file.path)}"] svg`);
-			if (nativeSvg) {
-				iconSpan.appendChild(nativeSvg.cloneNode(true));
-			} else {
-				setIcon(iconSpan, children.length > 0 ? 'file-text' : 'file');
-			}
-		} else {
+			const iconSpan = row.createSpan({cls: 'cn-icon'});
 			setIcon(iconSpan, children.length > 0 ? 'file-text' : 'file');
 		}
 
@@ -862,22 +855,46 @@ export class NestedNotesView extends ItemView {
 				source: folder,
 				finalName,
 				tempPath: this.joinPath(parentFolderPath, `${tempSuffix}${i}`),
-				finalPath: this.joinPath(parentFolderPath, finalName),
 			};
 		});
 
-		for (const entry of entries) {
-			if (entry.source.path !== entry.tempPath) {
-				await this.app.fileManager.renameFile(entry.source, entry.tempPath);
+		try {
+			for (const entry of entries) {
+				if (entry.source.path !== entry.tempPath) {
+					await this.app.fileManager.renameFile(entry.source, entry.tempPath);
+				}
 			}
-		}
 
-		for (const entry of entries) {
-			const tempFolder = this.app.vault.getFolderByPath(entry.tempPath) ?? entry.source;
-			if (tempFolder.path !== entry.finalPath) {
-				await this.app.fileManager.renameFile(tempFolder, entry.finalPath);
+			for (const entry of entries) {
+				const tempFolder = this.app.vault.getFolderByPath(entry.tempPath) ?? entry.source;
+				const finalPath = this.getAvailableFolderPath(parentFolderPath, entry.finalName);
+				if (tempFolder.path !== finalPath) {
+					await this.app.fileManager.renameFile(tempFolder, finalPath);
+				}
+				await this.ensureMainFileMatchesFolder(finalPath, `${this.basenameFromPath(finalPath)}.md`);
 			}
-			await this.ensureMainFileMatchesFolder(entry.finalPath, `${entry.finalName}.md`);
+		} catch (error) {
+			await this.cleanupTempFolders();
+			throw error;
+		}
+	}
+
+	private async cleanupTempFolders(): Promise<void> {
+		const tempFolders = this.app.vault.getAllLoadedFiles()
+			.filter((file): file is TFolder => file instanceof TFolder && /^__reorder_/.test(file.name));
+
+		for (const folder of tempFolders) {
+			const markdown = folder.children.find(
+				(child): child is TFile => child instanceof TFile && child.extension === 'md'
+			);
+			if (!markdown) continue;
+
+			const parentPath = this.folderPath(folder.parent);
+			const finalName = this.getAvailableFolderPath(parentPath, this.stripOrderPrefix(markdown.basename));
+			if (finalName === folder.path) continue;
+
+			await this.app.fileManager.renameFile(folder, finalName);
+			await this.ensureMainFileMatchesFolder(finalName, `${this.basenameFromPath(finalName)}.md`);
 		}
 	}
 

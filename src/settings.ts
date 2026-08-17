@@ -14,10 +14,10 @@ export class NestedNotesSettingTab extends PluginSettingTab {
 		const {containerEl} = this;
 		containerEl.empty();
 		
-		/** Show file icon setting */
+		/** Show icon setting */
 		new Setting(containerEl)
-			.setName('Show file icon')
-			.setDesc('Display the file icon beside each note, matching the icon shown in the files view.')
+			.setName('Show icons')
+			.setDesc('Display a page icon beside each note: a document icon when it has nested notes, a file icon otherwise.')
 			.addToggle(toggle => {
 				toggle.setValue(this.plugin.data.showFileIcon);
 				toggle.onChange(async (value) => {

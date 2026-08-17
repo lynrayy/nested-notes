@@ -9,6 +9,6 @@ export interface NestedNotesData {
 
 export const DEFAULT_DATA: NestedNotesData = {
 	collapsed: [],
-	showFileIcon: false,
+	showFileIcon: true,
 	showFolderPath: false,
 };

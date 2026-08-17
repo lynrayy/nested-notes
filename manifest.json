@@ -1,7 +1,7 @@
 {
 	"id": "nested-notes",
 	"name": "Nested Notes",
-	"version": "2.1.3",
+	"version": "2.1.4",
 	"minAppVersion": "0.15.0",
 	"description": "Nest notes under other notes with drag-and-drop and collapse/expand.",
 	"author": "October, Lynrayy",
