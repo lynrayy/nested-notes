@@ -30,6 +30,11 @@ You can activate this plugin within Obsidian by doing the following:
   - Show/hide file icon
   - Show/hide folder path
 
+### 2.0.0
+- Files nested in file system
+- Add nested note button on hover
+- Auto-building content list in parent note
+
 
 ## License 
 
