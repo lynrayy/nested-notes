@@ -1,11 +1,13 @@
 # Nested Notes
 
-This is an [Obsidian](https://obsidian.md/) plugin that enables organizing notes in a nested structure by drag-and-drop. 
+This is an [Obsidian](https://obsidian.md/) plugin that enables organizing notes in a nested structure by drag-and-drop, just like in Notion. 
 
 You can use this plugin for nested tags, indexing topics, maps of contents (MOC), etc.
 
+This plugin is a fork of nested-notes by october (https://github.com/october-learns/nested-notes)
 
-## Demo 
+
+## Original plugin demo (1.x.x)
 ![demo](/media/demo.gif)
 
 
@@ -18,7 +20,7 @@ You can activate this plugin within Obsidian by doing the following:
 - Browse > Search for **Nested Notes** > Install 
 
 
-## Latest Release 
+## Release history
 
 ### 1.0.0
 - First Release 
@@ -30,26 +32,16 @@ You can activate this plugin within Obsidian by doing the following:
   - Show/hide file icon
   - Show/hide folder path
 
-### 2.0.0
+### 2.x.x
 - Change: Files nested in file system
 - Added: Add nested note button on hover
 - Added: Auto-building content list in parent note
-### 2.1.2
 - Added: Ability to manually rearrange notes
+- Changed: Notion-like icons
+- Added: Drag-n-drop links creation
 
+## Reworked edition demo (2.x.x)
 ![2.1.3 demo](/media/Demo%202.1.3.jpg)
-
-### 2.2.0
-- Change: The sort index now lives only on the folder, so note titles stay clean
-
-  A note is stored as `3 My note/My note.md`: the folder keeps the `3` used for
-  sorting, while the note file itself has no number. The index no longer shows up
-  in the tab title or in the note's inline title.
-- Change: Notes without an index are still shown in the hierarchy (sorted last)
-- Added: Folder and note names are kept in sync when you rename either one,
-  including renames from the tab title, inline title or file explorer
-- Added: One-time migration that moves the index off existing note files
-  (links are preserved)
 
 
 ## License 
@@ -58,4 +50,4 @@ This project is licensed under the GNU General Public License v3.0 - see the LIC
 
 
 ## Support Me 
--
+Not available now
