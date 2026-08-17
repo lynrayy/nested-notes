@@ -1,5 +1,9 @@
 # Change Log 
 
+## 2.2.4
+- Maintenance: dropped legacy backward-compatibility entries from `versions.json`;
+  the plugin now targets Obsidian `1.13.7+` only.
+
 ## 2.2.3
 - Fixed: Newly created notes had no order index, and an index was not regenerated
   after a rename, so manual ordering/reordering did not work. `renameNote` now
