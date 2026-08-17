@@ -1,4 +1,4 @@
-import {App, PluginSettingTab, Setting} from 'obsidian';
+import {App, PluginSettingTab, SettingDefinitionItem} from 'obsidian';
 import type NestedNotesPlugin from './main';
 
 export class NestedNotesSettingTab extends PluginSettingTab {
@@ -9,35 +9,31 @@ export class NestedNotesSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	/** Builds the settings UI. */
-	display(): void {
-		const {containerEl} = this;
-		containerEl.empty();
-		
-		/** Show icon setting */
-		new Setting(containerEl)
-			.setName('Show icons')
-			.setDesc('Display a page icon beside each note: a document icon when it has nested notes, a file icon otherwise.')
-			.addToggle(toggle => {
-				toggle.setValue(this.plugin.data.showFileIcon);
-				toggle.onChange(async (value) => {
-					this.plugin.data.showFileIcon = value;
-					await this.plugin.savePluginData();
-					this.plugin.refreshView();
-				});
-			});
+	/** Declarative settings so Obsidian renders them and indexes them for search (1.13+). */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: 'Show icons',
+				desc: 'Display a page icon beside each note: a document icon when it has nested notes, a file icon otherwise.',
+				control: {type: 'toggle', key: 'showFileIcon'},
+			},
+			{
+				name: 'Show folder path',
+				desc: 'Display the path before the note name.',
+				control: {type: 'toggle', key: 'showFolderPath'},
+			},
+		];
+	}
 
-		/** Show folder path setting */	
-		new Setting(containerEl)
-			.setName('Show folder path')
-			.setDesc('Display the path before the note name.')
-			.addToggle(toggle => {
-				toggle.setValue(this.plugin.data.showFolderPath);
-				toggle.onChange(async (value) => {
-					this.plugin.data.showFolderPath = value;
-					await this.plugin.savePluginData();
-					this.plugin.refreshView();
-				});
-			});
+	/** Reads a setting value from this plugin's data store. */
+	getControlValue(key: string): unknown {
+		return (this.plugin.data as unknown as Record<string, unknown>)[key];
+	}
+
+	/** Persists a setting value to this plugin's data store and refreshes the view. */
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		(this.plugin.data as unknown as Record<string, unknown>)[key] = value;
+		await this.plugin.savePluginData();
+		this.plugin.refreshView();
 	}
 }
