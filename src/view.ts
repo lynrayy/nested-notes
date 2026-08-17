@@ -361,8 +361,12 @@ export class NestedNotesView extends ItemView {
 		const canonicalNodes = new Map<string, NoteNode>();
 		const looseNodes: NoteNode[] = [];
 
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const folder = this.getCanonicalNoteFolder(file);
+		for (const file of this.app.vault.getFiles()) {
+			// A canonical note is identified by its markdown main file. Every
+			// other file (including notes created outside the plugin and other
+			// Obsidian data formats) is treated as a loose file so it still
+			// shows up in the hierarchy.
+			const folder = file.extension === 'md' ? this.getCanonicalNoteFolder(file) : null;
 			if (folder) {
 				canonicalNodes.set(folder.path, {file, folder, children: []});
 				continue;
@@ -383,7 +387,10 @@ export class NestedNotesView extends ItemView {
 		}
 
 		for (const node of looseNodes) {
-			if (!this.hasCanonicalAncestor(node.file, canonicalNodes)) {
+			const parentNode = this.nearestCanonicalAncestor(node.file, canonicalNodes);
+			if (parentNode) {
+				parentNode.children.push(node);
+			} else {
 				topLevel.push(node);
 			}
 		}
@@ -412,13 +419,14 @@ export class NestedNotesView extends ItemView {
 		return node.folder ? node.folder.name : node.file.basename;
 	}
 
-	private hasCanonicalAncestor(file: TFile, canonicalNodes: Map<string, NoteNode>): boolean {
+	private nearestCanonicalAncestor(file: TFile, canonicalNodes: Map<string, NoteNode>): NoteNode | null {
 		let folder = file.parent;
 		while (folder && !folder.isRoot()) {
-			if (canonicalNodes.has(folder.path)) return true;
+			const node = canonicalNodes.get(folder.path);
+			if (node) return node;
 			folder = folder.parent;
 		}
-		return false;
+		return null;
 	}
 
 	private async createTopLevelNote(): Promise<void> {
