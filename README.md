@@ -37,6 +37,8 @@ You can activate this plugin within Obsidian by doing the following:
 ### 2.1.2
 - Added: Ability to manually rearrange notes
 
+![2.1.3 demo](/media/Demo 2.1.3.jpg)
+
 
 ## License 
 
