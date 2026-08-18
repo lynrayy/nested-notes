@@ -49,5 +49,9 @@ You can activate this plugin within Obsidian by doing the following:
 This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.
 
 
+## AI disclosure
+
+Generative neural networks were used to write this project.
+
 ## Support Me 
 Not available now
