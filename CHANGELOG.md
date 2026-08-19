@@ -1,5 +1,26 @@
 # Change Log 
 
+## 2.2.6
+- Fixed: Renaming a note by editing its title in the Obsidian editor (or anywhere
+  outside the plugin) could break the note. When a note file was renamed but its
+  folder was not yet in sync, the next plugin action wrapped the file in a brand
+  new folder, abandoning the original folder. That orphaned the note's nested
+  notes (they jumped to the top level), hid the note from the panel, and left a
+  duplicate order index behind. The plugin now renames the existing note folder
+  back onto its file instead of creating a new one, so nested notes and the order
+  index are preserved.
+- Fixed: Nested notes no longer fall out of the hierarchy when an intermediate
+  folder temporarily stops being a note. Each note now attaches to the closest
+  note above it rather than only to its direct parent.
+- Fixed: Dropping or nesting a note onto a target whose folder was out of sync no
+  longer silently does nothing; the target is repaired first so the move happens.
+- Fixed: Reordering siblings no longer produces duplicate indices. Indices already
+  held by other sibling folders are skipped, and a note folder that becomes empty
+  after a note is moved out of it is removed.
+- Added: Renames the plugin could not observe (panel closed, or made while one of
+  the plugin's own operations was still running) are now detected and repaired the
+  next time the plugin runs, restoring the note folder to match its file.
+
 ## 2.2.4
 - Maintenance: dropped legacy backward-compatibility entries from `versions.json`;
   the plugin now targets Obsidian `1.13.7+` only.

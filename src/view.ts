@@ -119,6 +119,9 @@ export class NestedNotesView extends ItemView {
 	private dropRow: HTMLElement | null = null;
 	private dropMode: DropMode | null = null;
 	private suppressDepth = 0;
+	private missedExternalChange = false;
+	private repairingStructure = false;
+	private readonly pendingRenameTimeouts = new Set<number>();
 	private activeFilePath: string | null = null;
 	private activeMenu: Menu | null = null;
 	private activeMenuPath: string | null = null;
@@ -182,8 +185,15 @@ export class NestedNotesView extends ItemView {
 		);
 		this.registerEvent(
 			this.app.vault.on('rename', (file, oldPath) => {
-				if (this.suppressDepth > 0) return;
-				void this.handleExternalRename(file, oldPath);
+				if (this.suppressDepth > 0) {
+					// A rename made by the user while one of our own batches is
+					// still running must not be lost, or the note folder and the
+					// note file stay out of sync forever. Remember it and repair
+					// the structure once the batch is finished.
+					this.missedExternalChange = true;
+					return;
+				}
+				this.queueExternalRename(file, oldPath);
 			})
 		);
 		this.registerEvent(
@@ -204,6 +214,9 @@ export class NestedNotesView extends ItemView {
 			await this.migrateLegacyChildren();
 			await this.migrateNoteFileIndices();
 			await this.cleanupTempFolders();
+			// Renames made while the panel was closed were never mirrored onto
+			// the note folders, so repair them before the tree is built.
+			await this.repairDesyncedNoteFolders();
 			await this.syncAllChildLinkBlocks();
 		});
 		this.activeFilePath = this.app.workspace.getActiveFile()?.path ?? null;
@@ -211,6 +224,10 @@ export class NestedNotesView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		for (const timeoutId of this.pendingRenameTimeouts) {
+			window.clearTimeout(timeoutId);
+		}
+		this.pendingRenameTimeouts.clear();
 		this.hideActiveMenu();
 		this.contentEl.empty();
 	}
@@ -393,8 +410,11 @@ export class NestedNotesView extends ItemView {
 
 		const topLevel: NoteNode[] = [];
 		for (const node of canonicalNodes.values()) {
-			const parentFolder = node.folder?.parent;
-			const parentNode = parentFolder ? canonicalNodes.get(parentFolder.path) : null;
+			// Attach the note to the closest note above it instead of only to its
+			// direct parent folder. A folder in between that is not a note (a plain
+			// folder, or a note folder whose note file was moved away) must not drop
+			// the whole subtree to the top level.
+			const parentNode = this.nearestCanonicalAncestor(node.folder?.parent ?? null, canonicalNodes);
 			if (parentNode && parentNode !== node) {
 				parentNode.children.push(node);
 			} else {
@@ -403,7 +423,7 @@ export class NestedNotesView extends ItemView {
 		}
 
 		for (const node of looseNodes) {
-			const parentNode = this.nearestCanonicalAncestor(node.file, canonicalNodes);
+			const parentNode = this.nearestCanonicalAncestor(node.file.parent, canonicalNodes);
 			if (parentNode) {
 				parentNode.children.push(node);
 			} else {
@@ -435,8 +455,8 @@ export class NestedNotesView extends ItemView {
 		return node.folder ? node.folder.name : node.file.basename;
 	}
 
-	private nearestCanonicalAncestor(file: TFile, canonicalNodes: Map<string, NoteNode>): NoteNode | null {
-		let folder = file.parent;
+	private nearestCanonicalAncestor(startFolder: TFolder | null, canonicalNodes: Map<string, NoteNode>): NoteNode | null {
+		let folder = startFolder;
 		while (folder && !folder.isRoot()) {
 			const node = canonicalNodes.get(folder.path);
 			if (node) return node;
@@ -793,6 +813,7 @@ export class NestedNotesView extends ItemView {
 		const targetParent = this.folderPath(topLevelParent);
 		await this.moveNoteToParentFolder(file, targetParent);
 		if (sourceParent && sourceParent !== targetParent) {
+			await this.removeEmptyNoteFolder(sourceParent);
 			await this.renumberSiblings(sourceParent);
 		}
 		await this.renumberSiblings(targetParent);
@@ -804,13 +825,21 @@ export class NestedNotesView extends ItemView {
 		const childFile = this.app.vault.getFileByPath(childPath);
 		if (!childFile) return;
 
+		// Repairing the drop target can rename the folder the dragged note lives in,
+		// so resolve the note's own folder only after the target is settled.
+		const parentFolder = await this.ensureCanonicalNoteFolder(parentFile);
+
 		const childFolder = this.getCanonicalNoteFolder(childFile);
 		const childParent = childFolder ? this.folderPath(childFolder.parent) : '';
+		if (childFolder && this.isSameOrDescendantPath(parentFolder.path, childFolder.path)) {
+			new Notice('Cannot move a note inside itself.');
+			return;
+		}
 
-		const parentFolder = await this.ensureCanonicalNoteFolder(parentFile);
 		await this.moveNoteToParentFolder(childFile, parentFolder.path);
 
 		if (childParent && childParent !== parentFolder.path) {
+			await this.removeEmptyNoteFolder(childParent);
 			await this.renumberSiblings(childParent);
 		}
 		await this.renumberSiblings(parentFolder.path);
@@ -890,6 +919,13 @@ export class NestedNotesView extends ItemView {
 	private async ensureCanonicalNoteFile(file: TFile): Promise<TFile> {
 		if (this.getCanonicalNoteFolder(file)) return file;
 
+		// A rename made outside the plugin only renames the note file, so the note
+		// folder and its file can diverge. Repair that folder instead of wrapping
+		// the file in a brand new one: wrapping would abandon the existing folder
+		// together with its order index and leave its nested notes orphaned.
+		const adopted = await this.adoptDesyncedNoteFolder(file);
+		if (adopted) return adopted;
+
 		const parentPath = this.folderPath(file.parent);
 		const folderPath = this.getAvailableFolderPath(parentPath, file.basename);
 		await this.ensureFolder(folderPath);
@@ -899,6 +935,111 @@ export class NestedNotesView extends ItemView {
 			await this.app.fileManager.renameFile(file, targetPath);
 		}
 		return this.getFileOrThrow(targetPath);
+	}
+
+	/**
+	 * Renames a note folder back onto its note file after the file was renamed
+	 * outside the plugin (inline title, tab title, file explorer). The folder keeps
+	 * its order index and all of its nested notes, so nothing drops out of the
+	 * hierarchy. Returns null when `file` is not the note file of its own folder.
+	 */
+	private async adoptDesyncedNoteFolder(file: TFile): Promise<TFile | null> {
+		const folder = file.parent;
+		if (!folder || this.getDesyncedNoteFile(folder) !== file) return null;
+
+		const index = this.parseOrderIndex(folder.name);
+		const newName = this.sanitizeNoteName(file.basename);
+		const targetFolderName = index !== null ? this.formatOrderName(index, newName) : newName;
+		const parentPath = this.folderPath(folder.parent);
+		const targetFolderPath = this.getAvailableFolderPath(parentPath, targetFolderName, folder.path);
+
+		if (targetFolderPath !== folder.path) {
+			await this.app.fileManager.renameFile(folder, targetFolderPath);
+		}
+		return await this.ensureMainFileMatchesFolder(targetFolderPath, file.name);
+	}
+
+	/**
+	 * Repairs every note whose file was renamed while the plugin could not react,
+	 * for example when the panel was closed or while a batch of our own was still
+	 * running. Without this the note vanishes from the panel, its nested notes drop
+	 * to the top level and its stale order index collides with its siblings.
+	 */
+	private async repairDesyncedNoteFolders(): Promise<void> {
+		let repairedCount = 0;
+
+		// Every repair renames a folder, so rescan until the vault is stable. The
+		// pass limit only guards against pathological loops; one pass is the norm.
+		for (let pass = 0; pass < 10; pass++) {
+			const desynced = this.findDesyncedNoteFolders();
+			if (desynced.length === 0) break;
+
+			for (const {folder, file} of desynced) {
+				// An earlier repair in this pass may have moved this folder already.
+				if (this.app.vault.getFolderByPath(folder.path) !== folder) continue;
+				if (this.getDesyncedNoteFile(folder) !== file) continue;
+				await this.adoptDesyncedNoteFolder(file);
+				repairedCount++;
+			}
+		}
+
+		if (repairedCount > 0) {
+			new Notice(
+				`Nested notes: restored ${repairedCount} renamed ${repairedCount === 1 ? 'note' : 'notes'}.`
+			);
+		}
+	}
+
+	private findDesyncedNoteFolders(): Array<{folder: TFolder; file: TFile}> {
+		const desynced: Array<{folder: TFolder; file: TFile}> = [];
+		for (const entry of this.app.vault.getAllLoadedFiles()) {
+			if (!(entry instanceof TFolder) || entry.isRoot()) continue;
+			const file = this.getDesyncedNoteFile(entry);
+			if (file) desynced.push({folder: entry, file});
+		}
+		return desynced;
+	}
+
+	/**
+	 * The note file of a folder whose name no longer matches it, so the folder can
+	 * be renamed back onto the file. Only folders that clearly take part in the
+	 * plugin's hierarchy qualify, so plain attachment folders are never renamed.
+	 */
+	private getDesyncedNoteFile(folder: TFolder): TFile | null {
+		if (folder.isRoot()) return null;
+		if (this.getCanonicalMainFile(folder)) return null;
+		if (!this.isPluginManagedFolder(folder)) return null;
+
+		// More than one markdown file makes the note file ambiguous; leave it alone.
+		const markdownFiles = folder.children.filter(
+			(child): child is TFile => child instanceof TFile && child.extension === 'md'
+		);
+		return markdownFiles.length === 1 ? markdownFiles[0] ?? null : null;
+	}
+
+	/**
+	 * True when the folder is part of the structure this plugin maintains: it either
+	 * carries an order index or it already holds nested notes.
+	 */
+	private isPluginManagedFolder(folder: TFolder): boolean {
+		if (this.parseOrderIndex(folder.name) !== null) return true;
+		return folder.children.some(
+			(child): child is TFolder => child instanceof TFolder && this.isCanonicalNoteFolder(child)
+		);
+	}
+
+	/** The markdown file that acts as `folder`'s own note file, if it has one. */
+	private getCanonicalMainFile(folder: TFolder): TFile | null {
+		for (const child of folder.children) {
+			if (
+				child instanceof TFile
+				&& child.extension === 'md'
+				&& this.isMainNoteFileName(folder, child.basename)
+			) {
+				return child;
+			}
+		}
+		return null;
 	}
 
 	private async ensureMainFileMatchesFolder(folderPath: string, currentFileName: string): Promise<TFile> {
@@ -1007,12 +1148,7 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private isCanonicalNoteFolder(folder: TFolder): boolean {
-		return folder.children.some(
-			(child): child is TFile =>
-				child instanceof TFile
-				&& child.extension === 'md'
-				&& this.isMainNoteFileName(folder, child.basename)
-		);
+		return this.getCanonicalMainFile(folder) !== null;
 	}
 
 	private getChildNoteFolders(parentFolderPath: string): TFolder[] {
@@ -1064,14 +1200,21 @@ export class NestedNotesView extends ItemView {
 	private async insertNoteRelative(draggedPath: string, targetFile: TFile, position: 'before' | 'after'): Promise<void> {
 		const draggedFile = this.app.vault.getFileByPath(draggedPath);
 		if (!draggedFile) return;
-
-		const targetFolder = this.getCanonicalNoteFolder(targetFile);
-		if (!targetFolder) return;
 		if (this.wouldMoveIntoSelf(draggedPath, targetFile)) return;
 
+		// The drop target is not always a canonical note yet, for example when a
+		// rename outside the plugin left its folder out of sync. Repair it first so
+		// the drop is never silently ignored.
+		const targetFolder = await this.ensureCanonicalNoteFolder(targetFile);
 		const targetParentPath = this.folderPath(targetFolder.parent);
 
+		// Repairing the target may have renamed the folder the dragged note sits in,
+		// so read the note's own folder only now.
 		const draggedFolder = this.getCanonicalNoteFolder(draggedFile);
+		if (draggedFolder && this.isSameOrDescendantPath(targetFolder.path, draggedFolder.path)) {
+			new Notice('Cannot move a note inside itself.');
+			return;
+		}
 		const sourceParentPath = draggedFolder ? this.folderPath(draggedFolder.parent) : '';
 
 		// Reordering within the same parent only reorders; moving across parents
@@ -1101,6 +1244,7 @@ export class NestedNotesView extends ItemView {
 		}
 
 		if (sourceParentPath && sourceParentPath !== targetParentPath) {
+			await this.removeEmptyNoteFolder(sourceParentPath);
 			await this.renumberSiblings(sourceParentPath);
 		}
 
@@ -1131,9 +1275,16 @@ export class NestedNotesView extends ItemView {
 	private async applyOrder(folders: TFolder[], parentFolderPath: string): Promise<void> {
 		if (folders.length === 0) return;
 
+		// Sibling folders that are not being ordered (a plain folder that already
+		// carries an index, for example) keep their number, so skip those numbers
+		// instead of handing out a duplicate index.
+		const reservedIndices = this.getReservedOrderIndices(parentFolderPath, folders);
+
 		const tempSuffix = `__reorder_${Date.now().toString(36)}__`;
+		let nextIndex = 1;
 		const entries = folders.map((folder, i) => {
-			const finalName = this.formatOrderName(i + 1, this.stripOrderPrefix(folder.name));
+			while (reservedIndices.has(nextIndex)) nextIndex++;
+			const finalName = this.formatOrderName(nextIndex++, this.stripOrderPrefix(folder.name));
 			return {
 				source: folder,
 				finalName,
@@ -1160,6 +1311,38 @@ export class NestedNotesView extends ItemView {
 			await this.cleanupTempFolders();
 			throw error;
 		}
+	}
+
+	/** Order indices held by sibling folders that are not part of `ordered`. */
+	private getReservedOrderIndices(parentFolderPath: string, ordered: TFolder[]): Set<number> {
+		const orderedPaths = new Set(ordered.map(folder => folder.path));
+		const parent = parentFolderPath
+			? this.app.vault.getFolderByPath(parentFolderPath)
+			: this.app.vault.getRoot();
+
+		const reserved = new Set<number>();
+		for (const child of parent?.children ?? []) {
+			if (!(child instanceof TFolder) || orderedPaths.has(child.path)) continue;
+			const index = this.parseOrderIndex(child.name);
+			if (index !== null) reserved.add(index);
+		}
+		return reserved;
+	}
+
+	/**
+	 * Removes the folder a note was moved out of when nothing is left inside it.
+	 * Only indexed folders are removed, so these are folders this plugin created;
+	 * leaving them behind would keep a stale index next to its siblings.
+	 */
+	private async removeEmptyNoteFolder(folderPath: string): Promise<void> {
+		if (!folderPath) return;
+
+		const folder = this.app.vault.getFolderByPath(folderPath);
+		if (!folder || folder.isRoot()) return;
+		if (folder.children.length > 0) return;
+		if (this.parseOrderIndex(folder.name) === null) return;
+
+		await this.app.fileManager.trashFile(folder);
 	}
 
 	private async cleanupTempFolders(): Promise<void> {
@@ -1219,6 +1402,19 @@ export class NestedNotesView extends ItemView {
 		this.renderTree();
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
+	}
+
+	/**
+	 * Handles a rename made outside the plugin on the next tick. Obsidian renames
+	 * the note file and updates the links to it, so the folder is renamed only
+	 * after that has finished instead of from inside the running rename.
+	 */
+	private queueExternalRename(file: TAbstractFile, oldPath: string): void {
+		const timeoutId = window.setTimeout(() => {
+			this.pendingRenameTimeouts.delete(timeoutId);
+			void this.handleExternalRename(file, oldPath);
+		}, 0);
+		this.pendingRenameTimeouts.add(timeoutId);
 	}
 
 	/**
@@ -1295,6 +1491,27 @@ export class NestedNotesView extends ItemView {
 			await task();
 		} finally {
 			this.suppressDepth--;
+		}
+		await this.flushMissedExternalChanges();
+	}
+
+	/**
+	 * Repairs renames the user made while one of our batches was running, which
+	 * are not reported to us. Nothing happens in the usual case where the only
+	 * renames during the batch were our own.
+	 */
+	private async flushMissedExternalChanges(): Promise<void> {
+		if (this.suppressDepth > 0 || !this.missedExternalChange || this.repairingStructure) return;
+
+		this.missedExternalChange = false;
+		if (this.findDesyncedNoteFolders().length === 0) return;
+
+		this.repairingStructure = true;
+		try {
+			await this.runBatched(() => this.repairDesyncedNoteFolders());
+			await this.handleVaultStructureChange();
+		} finally {
+			this.repairingStructure = false;
 		}
 	}
 
