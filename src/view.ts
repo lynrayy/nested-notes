@@ -479,7 +479,10 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private promptForNoteRename(file: TFile): void {
-		new NoteNameModal(this.app, this.displayBasename(file), async (name) => {
+		// Non-note files (canvas, base, ...) show their full name so the user
+		// sees the extension; markdown notes show the folder name instead.
+		const initial = file.extension === 'md' ? this.displayBasename(file) : file.name;
+		new NoteNameModal(this.app, initial, async (name) => {
 			await this.runBatched(() => this.renameNote(file, name));
 		}).open();
 	}
@@ -717,6 +720,15 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private async renameNote(file: TFile, name: string): Promise<void> {
+		// Non-markdown files are not notes: rename in place and keep their
+		// extension rather than converting them into a canonical note.
+		if (file.extension !== 'md') {
+			await this.renameLooseFile(file, name);
+			await this.syncAllChildLinkBlocks();
+			this.renderTree();
+			return;
+		}
+
 		const canonicalFile = await this.ensureCanonicalNoteFile(file);
 		const folder = this.getCanonicalNoteFolder(canonicalFile);
 		if (!folder) throw new Error('Could not resolve note folder.');
@@ -742,6 +754,23 @@ export class NestedNotesView extends ItemView {
 
 		await this.syncAllChildLinkBlocks();
 		this.renderTree();
+	}
+
+	/** Renames a non-note file in place, preserving its extension. */
+	private async renameLooseFile(file: TFile, name: string): Promise<void> {
+		const parentPath = this.folderPath(file.parent);
+		const sanitized = this.sanitizeNoteName(name);
+		const ext = file.extension;
+		// Strip a trailing extension when it matches the file's own extension, so
+		// the user can edit either the bare name or the full file name.
+		const baseName = sanitized.toLowerCase().endsWith(`.${ext.toLowerCase()}`)
+			? sanitized.slice(0, sanitized.length - ext.length - 1)
+			: sanitized;
+		const newName = `${baseName}.${ext}`;
+		const finalPath = this.getAvailableFilePath(parentPath, newName);
+		if (file.path !== finalPath) {
+			await this.app.fileManager.renameFile(file, finalPath);
+		}
 	}
 
 	private async deleteNote(file: TFile): Promise<void> {
@@ -797,6 +826,13 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private async moveNoteToParentFolder(file: TFile, targetParentFolderPath: string): Promise<TFile> {
+		// Non-markdown files (canvas, base, images, ...) are attachments, not
+		// notes. Move them as plain files instead of converting them to a
+		// canonical note folder (which would rename `x.canvas` to `x.md`).
+		if (file.extension !== 'md') {
+			return this.moveFileToFolder(file, targetParentFolderPath);
+		}
+
 		const canonicalFile = await this.ensureCanonicalNoteFile(file);
 		const folder = this.getCanonicalNoteFolder(canonicalFile);
 		if (!folder) throw new Error('Could not resolve note folder.');
@@ -813,6 +849,35 @@ export class NestedNotesView extends ItemView {
 		await this.app.fileManager.renameFile(folder, targetFolderPath);
 
 		return await this.ensureMainFileMatchesFolder(targetFolderPath, canonicalFile.name);
+	}
+
+	/** Moves any file into `targetParentFolderPath`, preserving its name and extension. */
+	private async moveFileToFolder(file: TFile, targetParentFolderPath: string): Promise<TFile> {
+		const currentParentPath = this.folderPath(file.parent);
+		if (currentParentPath === targetParentFolderPath) return file;
+
+		const finalPath = this.getAvailableFilePath(targetParentFolderPath, file.name);
+		if (file.path !== finalPath) {
+			await this.app.fileManager.renameFile(file, finalPath);
+		}
+		return this.getFileOrThrow(finalPath);
+	}
+
+	/** Returns a free file path inside `parentFolderPath` for `fileName` (adds ` N` on clash). */
+	private getAvailableFilePath(parentFolderPath: string, fileName: string): string {
+		const desired = this.joinPath(parentFolderPath, fileName);
+		if (!this.app.vault.getAbstractFileByPath(desired)) return desired;
+
+		const dotIndex = fileName.lastIndexOf('.');
+		const base = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+		const ext = dotIndex > 0 ? fileName.slice(dotIndex) : '';
+		let counter = 1;
+		while (true) {
+			const candidateName = `${base} ${counter}${ext}`;
+			const candidatePath = this.joinPath(parentFolderPath, candidateName);
+			if (!this.app.vault.getAbstractFileByPath(candidatePath)) return candidatePath;
+			counter++;
+		}
 	}
 
 	private async ensureCanonicalNoteFolder(file: TFile): Promise<TFolder> {
@@ -1017,7 +1082,11 @@ export class NestedNotesView extends ItemView {
 		}
 
 		const movedFolder = this.getCanonicalNoteFolder(movedFile);
-		if (!movedFolder) return;
+		if (!movedFolder) {
+			await this.syncAllChildLinkBlocks();
+			this.renderTree();
+			return;
+		}
 
 		const siblings = this.sortFoldersByName(this.getChildNoteFolders(targetParentPath));
 		const filtered = siblings.filter(sibling => sibling.path !== movedFolder.path);
