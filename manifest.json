@@ -1,7 +1,7 @@
 {
 	"id": "nested-notes-rework",
 	"name": "Nested Notes R",
-	"version": "2.2.6",
+	"version": "2.3.0",
 	"minAppVersion": "1.13.7",
 	"description": "Nest notes under other notes with drag-and-drop and collapse/expand. Manual rearrange supported.",
 	"author": "October, Lynrayy",

@@ -9,6 +9,7 @@ import {
 	TFolder,
 	WorkspaceLeaf,
 	normalizePath,
+	getIcon,
 	setIcon,
 } from 'obsidian';
 import type NestedNotesPlugin from './main';
@@ -44,6 +45,22 @@ const LEGACY_CHILD_LINKS_START = '<!-- nested-notes:children:start -->';
 const LEGACY_CHILD_LINKS_END = '<!-- nested-notes:children:end -->';
 
 const ORDER_PREFIX_RE = /^(\d+)\s+(.*)$/;
+
+/** Maps a file extension to the icon Obsidian uses for that type in the file explorer. */
+const FILE_TYPE_ICONS: Record<string, string> = {
+	png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+	bmp: 'image', svg: 'image', avif: 'image', heic: 'image', tiff: 'image',
+	canvas: 'layout-dashboard',
+	base: 'table',
+	mp3: 'file-audio', wav: 'file-audio', ogg: 'file-audio', m4a: 'file-audio', flac: 'file-audio',
+	mp4: 'file-video', webm: 'file-video', mov: 'file-video', mkv: 'file-video',
+	zip: 'file-archive', tar: 'file-archive', '7z': 'file-archive', rar: 'file-archive',
+	csv: 'file-spreadsheet', xls: 'file-spreadsheet', xlsx: 'file-spreadsheet',
+	json: 'file-json',
+	js: 'file-code', ts: 'file-code', tsx: 'file-code', jsx: 'file-code',
+	css: 'file-code', html: 'file-code', py: 'file-code', java: 'file-code',
+	sh: 'file-code', yml: 'file-code', yaml: 'file-code', xml: 'file-code',
+};
 
 export const VIEW_TYPE = 'nested-notes-view';
 
@@ -125,6 +142,8 @@ export class NestedNotesView extends ItemView {
 	private activeFilePath: string | null = null;
 	private activeMenu: Menu | null = null;
 	private activeMenuPath: string | null = null;
+	private renderSeq = 0;
+	private readonly textContentCache = new Map<string, {mtime: number; hasText: boolean}>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: NestedNotesPlugin) {
 		super(leaf);
@@ -206,7 +225,7 @@ export class NestedNotesView extends ItemView {
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file) => {
 				this.activeFilePath = file ? file.path : null;
-				this.renderTree();
+				void this.renderTree();
 			})
 		);
 
@@ -220,7 +239,7 @@ export class NestedNotesView extends ItemView {
 			await this.syncAllChildLinkBlocks();
 		});
 		this.activeFilePath = this.app.workspace.getActiveFile()?.path ?? null;
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	async onClose(): Promise<void> {
@@ -232,7 +251,8 @@ export class NestedNotesView extends ItemView {
 		this.contentEl.empty();
 	}
 
-	renderTree(): void {
+	async renderTree(): Promise<void> {
+		const seq = ++this.renderSeq;
 		this.contentEl.empty();
 
 		const container = this.contentEl.createDiv({cls: 'cn-container'});
@@ -244,11 +264,14 @@ export class NestedNotesView extends ItemView {
 		}
 
 		for (const node of topLevel) {
-			this.renderNote(node, container);
+			if (seq !== this.renderSeq) return;
+			await this.renderNote(node, container, seq);
 		}
 	}
 
-	private renderNote(node: NoteNode, container: HTMLElement): void {
+	private async renderNote(node: NoteNode, container: HTMLElement, seq: number): Promise<void> {
+		if (seq !== this.renderSeq) return;
+
 		const {file, children} = node;
 		const isCollapsed = this.plugin.data.collapsed.includes(file.path);
 
@@ -270,7 +293,7 @@ export class NestedNotesView extends ItemView {
 
 		if (this.plugin.data.showFileIcon) {
 			const iconSpan = row.createSpan({cls: 'cn-icon'});
-			setIcon(iconSpan, children.length > 0 ? 'file-text' : 'file');
+			setIcon(iconSpan, await this.getFileIconName(file));
 		}
 
 		const nameWrap = row.createSpan({cls: 'cn-name'});
@@ -385,7 +408,8 @@ export class NestedNotesView extends ItemView {
 		if (children.length > 0 && !isCollapsed) {
 			const childContainer = container.createDiv({cls: 'cn-children'});
 			for (const child of children) {
-				this.renderNote(child, childContainer);
+				if (seq !== this.renderSeq) return;
+				await this.renderNote(child, childContainer, seq);
 			}
 		}
 	}
@@ -473,7 +497,7 @@ export class NestedNotesView extends ItemView {
 		this.promptForNoteRename(file);
 		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async createNestedNote(parentFile: TFile): Promise<void> {
@@ -483,7 +507,7 @@ export class NestedNotesView extends ItemView {
 		this.promptForNoteRename(file);
 		await this.renumberSiblings(parentFolder.path);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async createNoteInFolder(parentFolderPath: string, preferredName: string): Promise<TFile> {
@@ -638,7 +662,7 @@ export class NestedNotesView extends ItemView {
 
 		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	/** Recursively copies every file and subfolder from `source` into `targetPath`. */
@@ -679,7 +703,7 @@ export class NestedNotesView extends ItemView {
 		}
 		await this.app.vault.copy(file, targetPath);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	/**
@@ -736,7 +760,7 @@ export class NestedNotesView extends ItemView {
 		} else {
 			plugin.addItem({type: 'file', path: file.path});
 		}
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async renameNote(file: TFile, name: string): Promise<void> {
@@ -745,7 +769,7 @@ export class NestedNotesView extends ItemView {
 		if (file.extension !== 'md') {
 			await this.renameLooseFile(file, name);
 			await this.syncAllChildLinkBlocks();
-			this.renderTree();
+			void this.renderTree();
 			return;
 		}
 
@@ -773,7 +797,7 @@ export class NestedNotesView extends ItemView {
 		await this.renumberSiblings(parentPath);
 
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	/** Renames a non-note file in place, preserving its extension. */
@@ -800,7 +824,7 @@ export class NestedNotesView extends ItemView {
 		await this.app.fileManager.trashFile(folder ?? file);
 		await this.renumberSiblings(parentPath);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async promoteToTopLevel(path: string): Promise<void> {
@@ -818,7 +842,7 @@ export class NestedNotesView extends ItemView {
 		}
 		await this.renumberSiblings(targetParent);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async nestNote(childPath: string, parentFile: TFile): Promise<void> {
@@ -851,7 +875,7 @@ export class NestedNotesView extends ItemView {
 		}
 
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async moveNoteToParentFolder(file: TFile, targetParentFolderPath: string): Promise<TFile> {
@@ -1139,6 +1163,55 @@ export class NestedNotesView extends ItemView {
 		return folder ? this.stripOrderPrefix(folder.name) : file.basename;
 	}
 
+	/**
+	 * Icon shown next to a file in the tree. Non-markdown files keep Obsidian's own
+	 * type icon (mirroring the file explorer), while markdown notes are overridden:
+	 * they show the "filled" `file-text` icon when they carry real text and the
+	 * empty `file` icon when they don't, so container notes read as empty.
+	 */
+	private async getFileIconName(file: TFile): Promise<string> {
+		if (file.extension === 'md') {
+			return (await this.noteHasText(file)) ? 'file-text' : 'file';
+		}
+		return this.getOriginalFileIcon(file);
+	}
+
+	/**
+	 * Returns the icon Obsidian itself uses for a given file type, so the tree
+	 * matches the file explorer (images, canvas, base, audio, ... all look right).
+	 * Falls back to the generic document icon if a mapped icon is unavailable.
+	 */
+	private getOriginalFileIcon(file: TFile): string {
+		const mapped = FILE_TYPE_ICONS[file.extension.toLowerCase()];
+		const icon = mapped ?? 'file';
+		return getIcon(icon) ? icon : 'file';
+	}
+
+	/** True when a markdown note has any content beyond the auto child-links block. */
+	private async noteHasText(file: TFile): Promise<boolean> {
+		const cached = this.textContentCache.get(file.path);
+		if (cached && cached.mtime === file.stat.mtime) {
+			return cached.hasText;
+		}
+		// cachedRead resolves from Obsidian's cache without hitting disk when possible.
+		const content = await this.app.vault.cachedRead(file);
+		const hasText = this.contentHasText(content);
+		this.textContentCache.set(file.path, {mtime: file.stat.mtime, hasText});
+		return hasText;
+	}
+
+	/**
+	 * Decides whether a note's content counts as text. Only whitespace and the
+	 * auto-generated "Pages inside" child-links block (plus its legacy form) are
+	 * ignored; headings (`# Title`) and frontmatter are real content.
+	 */
+	private contentHasText(content: string): boolean {
+		const withoutCallout = this.replaceChildLinksBlock(content, '');
+		return withoutCallout
+			.split(/\r?\n/)
+			.some(line => line.trim() !== '');
+	}
+
 	/** Markdown link used when a note is dragged into a note's text. */
 	private getDragLinkText(file: TFile): string {
 		const display = this.displayBasename(file);
@@ -1188,7 +1261,7 @@ export class NestedNotesView extends ItemView {
 
 		await this.applyOrder(siblings, parentPath);
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private async renumberSiblings(parentFolderPath: string): Promise<void> {
@@ -1227,7 +1300,7 @@ export class NestedNotesView extends ItemView {
 		const movedFolder = this.getCanonicalNoteFolder(movedFile);
 		if (!movedFolder) {
 			await this.syncAllChildLinkBlocks();
-			this.renderTree();
+			void this.renderTree();
 			return;
 		}
 
@@ -1249,7 +1322,7 @@ export class NestedNotesView extends ItemView {
 		}
 
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private setDropIndicator(row: HTMLElement, mode: DropMode): void {
@@ -1399,9 +1472,9 @@ export class NestedNotesView extends ItemView {
 	}
 
 	private async handleVaultStructureChange(): Promise<void> {
-		this.renderTree();
+		void this.renderTree();
 		await this.syncAllChildLinkBlocks();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	/**
@@ -1690,7 +1763,7 @@ export class NestedNotesView extends ItemView {
 			this.plugin.data.collapsed.push(path);
 		}
 		void this.plugin.savePluginData();
-		this.renderTree();
+		void this.renderTree();
 	}
 
 	private getFileOrThrow(path: string): TFile {

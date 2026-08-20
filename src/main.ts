@@ -92,7 +92,7 @@ export default class NestedNotesPlugin extends Plugin {
 	/** Triggers a full re-render of the tree in all open Nested Notes leaves. */
 	refreshView(): void {
 		this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach(leaf => {
-			(leaf.view as NestedNotesView).renderTree();
+			void (leaf.view as NestedNotesView).renderTree();
 		});
 	}
 }
